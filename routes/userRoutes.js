@@ -10,14 +10,22 @@ router.get("/me", async (req, res) => {
         if (!token) return res.status(401).json({ message: "Нет доступа" });
 
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        const user = await User.findByPk(decoded.id, {
-            attributes: ["firstName", "lastName", "middleName", "birthDate", "phone"],
+        const user = await User.findByPk(decoded.id);
+
+        if (!user) {
+            return res.status(404).json({ message: "Пользователь не найден" });
+        }
+
+        res.json({
+            id: user.id,
+            phone: user.phone,
+            firstName: user.firstName || "",
+            lastName: user.lastName || "",
+            middleName: user.middleName || "",
+            birthDate: user.birthDate || "",
         });
-
-        if (!user) return res.status(404).json({ message: "Пользователь не найден" });
-
-        res.json(user);
     } catch (error) {
+        console.error("❌ Ошибка при получении профиля:", error);
         res.status(500).json({ message: "Ошибка сервера" });
     }
 });
