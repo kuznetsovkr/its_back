@@ -88,5 +88,50 @@ router.post("/create", async (req, res) => {
         res.status(500).json({ message: "Ошибка оформления заказа", error: error.message });
     }
 });
+router.put("/update-status/:orderId", async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const { status } = req.body;
+
+        const validStatuses = ["pending", "processing", "shipped", "delivered", "canceled"];
+        if (!validStatuses.includes(status)) {
+            return res.status(400).json({ message: "Некорректный статус" });
+        }
+
+        const order = await Order.findByPk(orderId);
+        if (!order) {
+            return res.status(404).json({ message: "Заказ не найден" });
+        }
+
+        order.status = status;
+        await order.save();
+
+        res.json({ message: "Статус заказа обновлен", order });
+    } catch (error) {
+        console.error("Ошибка обновления статуса:", error);
+        res.status(500).json({ message: "Ошибка сервера при обновлении статуса" });
+    }
+});
+
+// 🔍 Проверка статуса заказа по номеру
+router.get("/status/:orderId", async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const order = await Order.findByPk(orderId);
+
+        if (!order) {
+            return res.status(404).json({ message: "Заказ не найден" });
+        }
+
+        res.json({ status: order.status });
+    } catch (error) {
+        console.error("Ошибка получения статуса заказа:", error);
+        res.status(500).json({ message: "Ошибка сервера" });
+    }
+});
+
+module.exports = router;
+
+
 
 module.exports = router;
