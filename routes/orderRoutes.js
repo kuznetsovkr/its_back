@@ -130,6 +130,28 @@ router.get("/status/:orderId", async (req, res) => {
     }
 });
 
+// 🔹 Получение заказов текущего пользователя
+router.get("/user", async (req, res) => {
+    try {
+        const token = req.headers.authorization?.split(" ")[1];
+        if (!token) return res.status(401).json({ message: "Нет доступа" });
+
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const userId = decoded.id;
+
+        const orders = await Order.findAll({ where: { userId } });
+
+        if (!orders.length) {
+            return res.status(404).json({ message: "У вас пока нет заказов." });
+        }
+
+        res.json(orders);
+    } catch (error) {
+        console.error("❌ Ошибка при получении заказов:", error);
+        res.status(500).json({ message: "Ошибка сервера при загрузке заказов." });
+    }
+});
+
 module.exports = router;
 
 
