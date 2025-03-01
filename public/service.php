@@ -1,14 +1,16 @@
 <?php
 
-$service = new service(/**
- * Вставьте свой аккаунт\идентификатор для интеграции
- * Put your account for integration here
- */ 'cdek-login',
+header("Access-Control-Allow-Origin: *");
+header("Access-Control-Allow-Methods: GET, POST, OPTIONS");
+header("Access-Control-Allow-Headers: Content-Type, Authorization");
 
-    /**
-     * Вставьте свой пароль для интеграции
-     * Put your password for integration here
-     */ 'cdek-pass');
+if ($_SERVER['REQUEST_METHOD'] == 'OPTIONS') {
+    http_response_code(200);
+    exit();
+}
+
+$service = new service('lBYFH953RqTyIub4ZsrMjVBZbcWgoJrE',
+ '5K4vYnHlnxwEnqO1yOgeY52PG0mTQkjA');
 $service->process($_GET, file_get_contents('php://input'));
 
 class service

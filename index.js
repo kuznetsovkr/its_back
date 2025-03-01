@@ -1,6 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
+const path = require("path");
 const sequelize = require("./db");
 const cdekRoutes = require("./routes/cdekRoutes");
 const userRoutes = require("./routes/userRoutes");
@@ -17,6 +18,14 @@ app.use("/api/auth", authRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/cdek", cdekRoutes);
 app.use("/api/user", userRoutes);
+
+// Раздаём статические файлы (включая service.php)
+app.use(express.static(path.join(__dirname, "public")));
+
+// Делаем service.php доступным по URL http://localhost:5000/service.php
+app.get("/service.php", (req, res) => {
+    res.sendFile(path.join(__dirname, "public", "service.php"));
+});
 
 const start = async () => {
   try {
