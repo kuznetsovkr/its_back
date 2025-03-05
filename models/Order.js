@@ -25,7 +25,7 @@ const Order = sequelize.define("order", {
     uploadedImage: { type: DataTypes.STRING, allowNull: true },
     comment: { type: DataTypes.TEXT, allowNull: true },
     orderDate: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
-    status: { type: DataTypes.STRING, allowNull: false, defaultValue: "pending" }, // ✅ Новый статус
+    status: { type: DataTypes.STRING, allowNull: false, defaultValue: "Сформировано" }, // ✅ Новый статус
 });
 
 module.exports = Order;

@@ -93,7 +93,7 @@ router.put("/update-status/:orderId", async (req, res) => {
         const { orderId } = req.params;
         const { status } = req.body;
 
-        const validStatuses = ["pending", "processing", "shipped", "delivered", "canceled"];
+        const validStatuses = ["Принят", "Дизайн", "Вышивка", "Отправлен", "Отменен"];
         if (!validStatuses.includes(status)) {
             return res.status(400).json({ message: "Некорректный статус" });
         }
@@ -139,18 +139,39 @@ router.get("/user", async (req, res) => {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
         const userId = decoded.id;
 
-        const orders = await Order.findAll({ where: { userId } });
-
-        if (!orders.length) {
-            return res.status(404).json({ message: "У вас пока нет заказов." });
-        }
+        const orders = await Order.findAll({ where: { userId }, order: [["orderDate", "DESC"]] });
 
         res.json(orders);
     } catch (error) {
-        console.error("❌ Ошибка при получении заказов:", error);
-        res.status(500).json({ message: "Ошибка сервера при загрузке заказов." });
+        console.error("Ошибка при получении заказов:", error);
+        res.status(500).json({ message: "Ошибка сервера" });
     }
 });
+
+router.get("/all", async (req, res) => {
+    try {
+        const token = req.headers.authorization?.split(" ")[1];
+        if (!token) return res.status(401).json({ message: "Нет доступа" });
+
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+        // Проверяем, является ли пользователь админом
+        const user = await User.findByPk(decoded.id);
+        if (!user || user.role !== "admin") {
+            return res.status(403).json({ message: "Нет доступа" });
+        }
+
+        // Если админ, получаем все заказы
+        const orders = await Order.findAll({ order: [["orderDate", "DESC"]] });
+
+        res.json(orders);
+    } catch (error) {
+        console.error("Ошибка при получении всех заказов:", error);
+        res.status(500).json({ message: "Ошибка сервера" });
+    }
+});
+
+
 
 module.exports = router;
 
