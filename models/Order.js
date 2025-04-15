@@ -6,12 +6,12 @@ const Order = sequelize.define("order", {
     id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
     userId: { 
         type: DataTypes.INTEGER, 
-        allowNull: true, // ✅ Разрешаем `null` для неавторизованных пользователей
+        allowNull: true,
         references: {
             model: User,
             key: "id",
         },
-        onDelete: "SET NULL", // ✅ Если пользователь удалён, оставляем заказ
+        onDelete: "SET NULL",
     },
     phone: { type: DataTypes.STRING, allowNull: false },
     firstName: { type: DataTypes.STRING, allowNull: false },
@@ -22,10 +22,9 @@ const Order = sequelize.define("order", {
     size: { type: DataTypes.STRING, allowNull: false },
     embroideryType: { type: DataTypes.STRING, allowNull: false },
     customText: { type: DataTypes.STRING, allowNull: true },
-    uploadedImage: { type: DataTypes.STRING, allowNull: true },
     comment: { type: DataTypes.TEXT, allowNull: true },
     orderDate: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
-    status: { type: DataTypes.STRING, allowNull: false, defaultValue: "Сформировано" }, // ✅ Новый статус
+    status: { type: DataTypes.STRING, allowNull: false, defaultValue: "Сформировано" },
 });
 
 module.exports = Order;

@@ -17,7 +17,7 @@ const normalizePhone = (phone) => {
     return phone.replace(/\D/g, "");
 };
 
-// ✅ Генерация кода и вывод в консоль (НО проверяем, если это не админ!)
+// Генерация кода и вывод в консоль (НО проверяем, если это не админ!)
 router.post("/request-sms", async (req, res) => {
     console.log("📩 Получен запрос на /request-sms, тело запроса:", req.body);
 
@@ -44,7 +44,7 @@ router.post("/request-sms", async (req, res) => {
     return res.json({ message: "Код сгенерирован и выведен в консоль" });
 });
 
-// ✅ Авторизация по SMS-коду
+//  Авторизация по SMS-коду
 router.post("/login", async (req, res) => {
     try {
         const { phone, smsCode } = req.body;
@@ -62,7 +62,7 @@ router.post("/login", async (req, res) => {
 
         smsCodes.delete(normalizedPhone); // Удаляем использованный код
 
-        // 🔍 Логируем перед запросом в базу
+        //  Логируем перед запросом в базу
         console.log(`🔍 Проверяем пользователя с номером: ${normalizedPhone}`);
 
         let user = await User.findOne({ where: { phone: normalizedPhone } });
@@ -72,7 +72,7 @@ router.post("/login", async (req, res) => {
             user = await User.create({ phone: normalizedPhone });
         }
 
-        console.log("✅ Найден / создан пользователь:", user);
+        console.log(" Найден / создан пользователь:", user);
 
         // Генерируем JWT-токен
         const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: "24h" });

@@ -5,8 +5,14 @@ const Order = require("../models/Order");
 const sendOrderToTelegram = require("../telegram");
 const router = express.Router();
 
+const multer = require("multer");
+const fs = require("fs");
+const path = require("path");
+
+const upload = multer({ dest: "uploads/" }); // временно сохраняем файлы
+
 // ✅ Создание заказа
-router.post("/create", async (req, res) => {
+router.post("/create", upload.array("images", 10), async (req, res) => {
     try {
         const authHeader = req.headers.authorization;
         console.log("🔑 Заголовок Authorization:", authHeader);
@@ -43,7 +49,6 @@ router.post("/create", async (req, res) => {
             size: req.body.size,
             embroideryType: req.body.embroideryType,
             customText: req.body.customText,
-            uploadedImage: req.body.uploadedImage,
             comment: req.body.comment,
         });
 
@@ -59,7 +64,6 @@ router.post("/create", async (req, res) => {
             size: req.body.size,
             embroideryType: req.body.embroideryType,
             customText: req.body.customText,
-            uploadedImage: req.body.uploadedImage,
             comment: req.body.comment,
             orderDate: new Date(),
         });
@@ -76,9 +80,11 @@ router.post("/create", async (req, res) => {
             size: req.body.size,
             embroideryType: req.body.embroideryType,
             customText: req.body.customText,
-            uploadedImage: req.body.uploadedImage,
             comment: req.body.comment,
-        });
+            totalPrice: req.body.totalPrice, 
+            deliveryAddress: req.body.deliveryAddress, 
+            images: req.files, // массив файлов
+        });        
 
         console.log("✅ Заказ успешно отправлен в Telegram");
 
@@ -170,10 +176,6 @@ router.get("/all", async (req, res) => {
         res.status(500).json({ message: "Ошибка сервера" });
     }
 });
-
-
-
-module.exports = router;
 
 
 

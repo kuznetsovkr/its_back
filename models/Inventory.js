@@ -24,7 +24,7 @@ const Inventory = sequelize.define("inventory", {
         allowNull: false,
         defaultValue: 0,
     },
-    imageUrl: { // ✅ Добавляем поле для изображения
+    imageUrl: {
         type: DataTypes.STRING,
         allowNull: true,
     }
