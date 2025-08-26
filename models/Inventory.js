@@ -27,7 +27,12 @@ const Inventory = sequelize.define("inventory", {
     imageUrl: {
         type: DataTypes.STRING,
         allowNull: true,
-    }
+    },
+    colorCode: {
+        type: DataTypes.STRING(7),
+        allowNull: true,
+    },
+}, {indexes: [{ unique: true, fields: ["productType", "color", "size"] }],
 });
 
 module.exports = Inventory;

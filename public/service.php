@@ -4,6 +4,25 @@ header("Access-Control-Allow-Origin: *");
 header("Access-Control-Allow-Methods: GET, POST, OPTIONS");
 header("Access-Control-Allow-Headers: Content-Type, Authorization");
 
+header('Content-Type: application/json; charset=utf-8');
+ini_set('display_errors', '0');
+
+// JSON на любые необработанные исключения
+set_exception_handler(function (Throwable $e) {
+    http_response_code(502);
+    echo json_encode(['error' => 'exception', 'message' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+});
+
+// JSON на фаталы/таймауты (вместо HTML)
+register_shutdown_function(function () {
+    $e = error_get_last();
+    if ($e && (stripos($e['message'] ?? '', 'Maximum execution time') !== false || $e['type'] === E_ERROR)) {
+        http_response_code(504);
+        echo json_encode(['error' => 'timeout', 'message' => 'Upstream took too long'], JSON_UNESCAPED_UNICODE);
+    }
+});
+
+
 if ($_SERVER['REQUEST_METHOD'] == 'OPTIONS') {
     http_response_code(200);
     exit();
@@ -49,24 +68,30 @@ class service
     public function process($requestData, $body)
     {
         $time = $this->startMetrics();
-
         $this->requestData = array_merge($requestData, json_decode($body, true) ?: array());
 
         if (!isset($this->requestData['action'])) {
             $this->sendValidationError('Action is required');
         }
 
-        $this->getAuthToken();
+        try {
+            $this->getAuthToken();
 
-        switch ($this->requestData['action']) {
-            case 'offices':
-                $this->sendResponse($this->getOffices(), $time);
-                break;
-            case 'calculate':
-                $this->sendResponse($this->calculate(), $time);
-                break;
-            default:
-                $this->sendValidationError('Unknown action');
+            switch ($this->requestData['action']) {
+                case 'offices':
+                    $this->sendResponse($this->getOffices(), $time);
+                    break;
+                case 'calculate':
+                    $this->sendResponse($this->calculate(), $time);
+                    break;
+                default:
+                    $this->sendValidationError('Unknown action');
+            }
+        } catch (Throwable $e) {
+            $this->http_response_code(502);
+            header('Content-Type: application/json');
+            echo json_encode(['error' => 'service_failed', 'message' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+            exit();
         }
     }
 
@@ -237,7 +262,6 @@ class service
             'X-App-Name: widget_pvz',
             'X-App-Version: 3.11.1'
         );
-
         if ($this->authToken) {
             $headers[] = "Authorization: Bearer $this->authToken";
         }
@@ -251,31 +275,50 @@ class service
             $headers[] = 'Content-Type: application/json';
             curl_setopt_array($ch, array(
                 CURLOPT_POST => true,
-                CURLOPT_POSTFIELDS => json_encode($data),
+                CURLOPT_POSTFIELDS => json_encode($data, JSON_UNESCAPED_UNICODE),
             ));
         } else {
             curl_setopt($ch, CURLOPT_URL, "$this->baseUrl/$method?" . http_build_query($data));
         }
 
         curl_setopt_array($ch, array(
-            CURLOPT_USERAGENT => 'widget/3.11.1',
-            CURLOPT_HTTPHEADER => $headers,
+            CURLOPT_USERAGENT      => 'widget/3.11.1',
+            CURLOPT_HTTPHEADER     => $headers,
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HEADER => true,
+            CURLOPT_HEADER         => true,
+
+            // 🔴 ключевые параметры
+            CURLOPT_CONNECTTIMEOUT => 5,   // ждать коннект не дольше 5с
+            CURLOPT_TIMEOUT        => 12,  // общий таймаут запроса < 30с php
+            CURLOPT_IPRESOLVE      => CURL_IPRESOLVE_V4, // обойти глюки с IPv6/DNS
+            CURLOPT_ENCODING       => '',  // принимать gzip/deflate
+            CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
+            CURLOPT_FAILONERROR    => false, // сами обработаем код
         ));
 
-        $response = curl_exec($ch);
+        $response   = curl_exec($ch);
+        $errno      = curl_errno($ch);
+        $err        = curl_error($ch);
+        $status     = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $headerSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
-        $headers = substr($response, 0, $headerSize);
-        $result = substr($response, $headerSize);
+        curl_close($ch);
 
-        $addedHeaders = $this->getHeaderValue($headers);
-
-        if ($result === false) {
-            throw new RuntimeException(curl_error($ch), curl_errno($ch));
+        if ($response === false || $errno) {
+            throw new RuntimeException("curl($method) failed: $err", $errno ?: 500);
         }
 
-        return array('result' => $result, 'addedHeaders' => $addedHeaders);
+        $headersStr = substr($response, 0, $headerSize);
+        $result     = substr($response, $headerSize);
+
+        // Если апстрим вернул не-JSON (например, HTML-страницу ошибки) — не пускаем это дальше
+        $decoded = json_decode($result, true);
+        if ($decoded === null) {
+            throw new RuntimeException("Upstream returned non-JSON for $method (HTTP $status)");
+        }
+
+        // Пробрасываем полезную мета-инфу
+        $addedHeaders = $this->getHeaderValue($headersStr);
+        return array('result' => json_encode($decoded, JSON_UNESCAPED_UNICODE), 'addedHeaders' => $addedHeaders);
     }
 
     private function getHeaderValue($headers)
@@ -323,8 +366,20 @@ class service
     protected function getOffices()
     {
         $time = $this->startMetrics();
-        $result = $this->httpRequest('deliverypoints', $this->requestData);
 
+        // Значения по умолчанию, если виджет не прислал фильтры
+        if (empty($this->requestData['type'])) {
+            $this->requestData['type'] = 'PVZ'; // только пункты выдачи, без постаматов
+        }
+        if (empty($this->requestData['country_code'])) {
+            $this->requestData['country_code'] = 'RU';
+        }
+        // Явно русскую локаль, чтобы не тянуть лишнее
+        if (empty($this->requestData['lang'])) {
+            $this->requestData['lang'] = 'rus';
+        }
+
+        $result = $this->httpRequest('deliverypoints', $this->requestData);
         $this->endMetrics('office', 'Offices Request', $time);
         return $result;
     }

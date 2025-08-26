@@ -16,11 +16,12 @@ router.get("/", async (req, res) => {
 // ✅ Добавить новую позицию
 router.post("/", async (req, res) => {
     try {
-        const { productType, color,size, quantity, imageUrl } = req.body; // ✅ Принимаем imageUrl
+        const { productType, color, colorCode, size, quantity, imageUrl } = req.body; // ✅ Принимаем imageUrl
 
         const newItem = await Inventory.create({
             productType,
             color,
+            colorCode,
             size,
             quantity,
             imageUrl, // ✅ Сохраняем ссылку в базу
@@ -35,7 +36,7 @@ router.post("/", async (req, res) => {
 
 router.put("/:id", async (req, res) => {
     try {
-        const { productType, color, quantity, size, imageUrl } = req.body;
+        const { productType, color, colorCode, quantity, size, imageUrl } = req.body;
         const item = await Inventory.findByPk(req.params.id);
 
         if (!item) {
@@ -44,6 +45,7 @@ router.put("/:id", async (req, res) => {
 
         item.productType = productType;
         item.color = color;
+        item.colorCode = colorCode;
         item.quantity = quantity;
         item.size = size;
         item.imageUrl = imageUrl;

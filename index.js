@@ -9,6 +9,9 @@ const authRoutes = require("./routes/authRoutes");
 const orderRoutes = require("./routes/orderRoutes");
 const inventoryRoutes = require("./routes/inventoryRoutes");
 const uploadRoutes = require("./routes/uploadRoutes");
+const Color = require('./models/Color');
+const colorsRouter = require('./routes/colors');
+
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -22,6 +25,7 @@ app.use("/api/cdek", cdekRoutes);
 app.use("/api/user", userRoutes);
 app.use("/api/inventory", inventoryRoutes);
 app.use("/api/upload", uploadRoutes);
+app.use('/api/colors', colorsRouter);
 
 // Раздаём статические файлы (включая service.php)
 app.use(express.static(path.join(__dirname, "public")));

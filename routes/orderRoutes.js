@@ -3,6 +3,9 @@ const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const Order = require("../models/Order");
 const sendOrderToTelegram = require("../telegram");
+const sequelize = require("../db");
+const Inventory = require("../models/Inventory");
+const PaymentEvent = require("../models/PaymentEvent");
 const router = express.Router();
 
 const multer = require("multer");
@@ -53,8 +56,8 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
         });
 
         // ✅ Создаём заказ в БД
-        const order = await Order.create({
-            userId: user?.id || null, // Если нет пользователя — null
+            const order = await Order.create({
+            userId: user?.id || null,
             phone: userData.phone,
             firstName: userData.firstName,
             lastName: userData.lastName,
@@ -66,7 +69,10 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
             customText: req.body.customText,
             comment: req.body.comment,
             orderDate: new Date(),
-        });
+            status: "Ожидание оплаты",
+            totalPrice: req.body.totalPrice ?? null,
+            deliveryAddress: req.body.deliveryAddress ?? null,
+            });
 
         console.log("✅ Заказ успешно сохранён в БД", order);
 
@@ -99,7 +105,7 @@ router.put("/update-status/:orderId", async (req, res) => {
         const { orderId } = req.params;
         const { status } = req.body;
 
-        const validStatuses = ["Принят", "Дизайн", "Вышивка", "Отправлен", "Отменен"];
+        const validStatuses = ["Ожидание оплаты", "Оплачено", "Принят", "Дизайн", "Вышивка", "Отправлен", "Отменен"];
         if (!validStatuses.includes(status)) {
             return res.status(400).json({ message: "Некорректный статус" });
         }
@@ -175,6 +181,62 @@ router.get("/all", async (req, res) => {
         console.error("Ошибка при получении всех заказов:", error);
         res.status(500).json({ message: "Ошибка сервера" });
     }
+});
+
+// POST /api/orders/confirm/:orderId
+router.post("/confirm/:orderId", async (req, res) => {
+  const { orderId } = req.params;
+  const { provider = "manual", eventId = `manual-${orderId}` } = req.body || {};
+
+  const t = await sequelize.transaction();
+  try {
+    // 1) Idempotency: если такое событие уже было — выходим «мягко»
+    await PaymentEvent.findOrCreate({
+      where: { eventId },
+      defaults: { provider, orderId, payload: req.body || {} },
+      transaction: t,
+    });
+
+    // 2) Лочим заказ
+    const order = await Order.findByPk(orderId, { transaction: t, lock: t.LOCK.UPDATE });
+    if (!order) {
+      await t.rollback();
+      return res.status(404).json({ message: "Заказ не найден" });
+    }
+
+    if (order.status === "Оплачено") {
+      await t.commit();
+      return res.json({ ok: true, alreadyProcessed: true });
+    }
+
+    // 3) Лочим строку склада и списываем 1 шт
+    const item = await Inventory.findOne({
+      where: { productType: order.productType, color: order.color, size: order.size },
+      transaction: t,
+      lock: t.LOCK.UPDATE,
+    });
+
+    if (!item || item.quantity < 1) {
+      throw new Error("Недостаточно товара на складе");
+    }
+
+    item.quantity -= 1;
+    await item.save({ transaction: t });
+
+    // 4) Обновляем заказ
+    order.status = "Оплачено";
+    order.paidAt = new Date();
+    if (req.body.totalPrice) order.totalPrice = req.body.totalPrice;
+    if (req.body.deliveryAddress) order.deliveryAddress = req.body.deliveryAddress;
+    await order.save({ transaction: t });
+
+    await t.commit();
+    res.json({ ok: true });
+  } catch (e) {
+    await t.rollback();
+    console.error("❌ Ошибка confirm:", e);
+    res.status(409).json({ message: e.message });
+  }
 });
 
 
