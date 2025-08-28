@@ -9,8 +9,11 @@ const authRoutes = require("./routes/authRoutes");
 const orderRoutes = require("./routes/orderRoutes");
 const inventoryRoutes = require("./routes/inventoryRoutes");
 const uploadRoutes = require("./routes/uploadRoutes");
-const Color = require('./models/Color');
 const colorsRouter = require('./routes/colors');
+const cron = require("node-cron");
+const { checkAllAndNotify } = require("./services/lowStockMonitor");
+require("./models/TelegramSubscriber"); // чтобы sync создал таблицу
+require("./bots/lowStockBot");          // запускаем long polling бота
 
 
 const app = express();
@@ -43,6 +46,19 @@ const start = async () => {
     await sequelize.sync({ alter: true }); // Обновляем БД, если что-то поменяется
 
     console.log("✅ Database connected");
+
+        // (Опционально) Разовый прогон при запуске
+    checkAllAndNotify().catch(e => console.error("Initial low-stock check error:", e));
+
+        // Крон: каждый час в 09 минут
+    cron.schedule("9 * * * *", async () => {
+      console.log("⏰ Low-stock cron tick");
+      try {
+        await checkAllAndNotify();
+      } catch (e) {
+        console.error("Low-stock cron error:", e);
+      }
+    });
 
     app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
   } catch (error) {

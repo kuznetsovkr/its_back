@@ -11,6 +11,9 @@ const Order = sequelize.define("order", {
     references: { model: User, key: "id" },
     onDelete: "SET NULL",
   },
+    // 🔹 ссылка на строку склада
+  inventoryId: { type: DataTypes.INTEGER, allowNull: true,
+    references: { model: "inventories", key: "id" }, onDelete: "SET NULL" },
   phone: { type: DataTypes.STRING, allowNull: false },
   firstName: { type: DataTypes.STRING, allowNull: false },
   lastName: { type: DataTypes.STRING, allowNull: false },

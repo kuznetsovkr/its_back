@@ -11,6 +11,9 @@ const router = express.Router();
 const multer = require("multer");
 const fs = require("fs");
 const path = require("path");
+const { checkItemAndNotify } = require("../services/lowStockMonitor"); // путь подкорректируй, если нужен
+const { findInventoryForOrder } = require("../services/inventoryResolver");
+
 
 const upload = multer({ dest: "uploads/" }); // временно сохраняем файлы
 
@@ -55,23 +58,35 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
             comment: req.body.comment,
         });
 
+        const inv = await findInventoryForOrder(req.body.productType, req.body.color, req.body.size);
+
+        if (!inv) {
+        console.error("[CREATE] inventory NOT FOUND for:", req.body.productType, req.body.color, req.body.size);
+        return res.status(400).json({ message: "Комбинация товара на складе не найдена" });
+        }
+        if (inv.quantity < 1) {
+        console.error("[CREATE] not enough stock id=", inv.id, "qty=", inv.quantity);
+        return res.status(409).json({ message: "Недостаточно товара на складе" });
+        }
+
         // ✅ Создаём заказ в БД
             const order = await Order.create({
-            userId: user?.id || null,
-            phone: userData.phone,
-            firstName: userData.firstName,
-            lastName: userData.lastName,
-            middleName: userData.middleName,
-            productType: req.body.productType,
-            color: req.body.color,
-            size: req.body.size,
-            embroideryType: req.body.embroideryType,
-            customText: req.body.customText,
-            comment: req.body.comment,
-            orderDate: new Date(),
-            status: "Ожидание оплаты",
-            totalPrice: req.body.totalPrice ?? null,
-            deliveryAddress: req.body.deliveryAddress ?? null,
+                userId: user?.id || null,
+                phone: userData.phone,
+                firstName: userData.firstName,
+                lastName: userData.lastName,
+                middleName: userData.middleName,
+                productType: req.body.productType,
+                color: req.body.color,
+                size: req.body.size,
+                embroideryType: req.body.embroideryType,
+                customText: req.body.customText,
+                comment: req.body.comment,
+                orderDate: new Date(),
+                status: "Ожидание оплаты",
+                totalPrice: req.body.totalPrice ?? null,
+                deliveryAddress: req.body.deliveryAddress ?? null,
+                inventoryId: inv.id, // <-- ВАЖНО
             });
 
         console.log("✅ Заказ успешно сохранён в БД", order);
@@ -190,7 +205,7 @@ router.post("/confirm/:orderId", async (req, res) => {
 
   const t = await sequelize.transaction();
   try {
-    // 1) Idempotency: если такое событие уже было — выходим «мягко»
+    // 1) Idempotency
     await PaymentEvent.findOrCreate({
       where: { eventId },
       defaults: { provider, orderId, payload: req.body || {} },
@@ -210,18 +225,30 @@ router.post("/confirm/:orderId", async (req, res) => {
     }
 
     // 3) Лочим строку склада и списываем 1 шт
-    const item = await Inventory.findOne({
-      where: { productType: order.productType, color: order.color, size: order.size },
-      transaction: t,
-      lock: t.LOCK.UPDATE,
-    });
 
-    if (!item || item.quantity < 1) {
-      throw new Error("Недостаточно товара на складе");
+    let item;
+
+    if (order.inventoryId) {
+    item = await Inventory.findByPk(order.inventoryId, { transaction: t, lock: t.LOCK.UPDATE });
+    } else {
+    // резерв для старых заказов без inventoryId
+    const { findInventoryForOrder } = require("../services/inventoryResolver");
+    item = await findInventoryForOrder(order.productType, order.color, order.size);
+    if (item) {
+        order.inventoryId = item.id;
+        await order.save({ transaction: t });
+    }
     }
 
-    item.quantity -= 1;
+    if (!item || item.quantity < 1) {
+    throw new Error("Недостаточно товара на складе");
+    }
+
+    item.quantity = Math.max(0, item.quantity - 1);
     await item.save({ transaction: t });
+
+    console.log("[CONFIRM]", { orderId, inventoryId: item.id, newQty: item.quantity });
+
 
     // 4) Обновляем заказ
     order.status = "Оплачено";
@@ -231,6 +258,14 @@ router.post("/confirm/:orderId", async (req, res) => {
     await order.save({ transaction: t });
 
     await t.commit();
+
+    // ⬇️ После коммита — запускаем проверку остатка (не ломаем ответ, если телега упадёт)
+    try {
+      await checkItemAndNotify(item.id);
+    } catch (notifyErr) {
+      console.error("Low-stock notify error:", notifyErr);
+    }
+
     res.json({ ok: true });
   } catch (e) {
     await t.rollback();
