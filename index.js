@@ -30,13 +30,6 @@ app.use("/api/inventory", inventoryRoutes);
 app.use("/api/upload", uploadRoutes);
 app.use('/api/colors', colorsRouter);
 
-// Раздаём статические файлы (включая service.php)
-app.use(express.static(path.join(__dirname, "public")));
-
-// Делаем service.php доступным по URL http://localhost:5000/service.php
-app.get("/service.php", (req, res) => {
-    res.sendFile(path.join(__dirname, "public", "service.php"));
-});
 // 🔹 Делаем папку uploads публичной (чтобы можно было загружать изображения)
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
