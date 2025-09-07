@@ -18,6 +18,7 @@ require("./bots/lowStockBot");          // запускаем long polling бо�
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, 'uploads');
 
 app.use(cors());
 app.use(express.json());
@@ -30,8 +31,11 @@ app.use("/api/inventory", inventoryRoutes);
 app.use("/api/upload", uploadRoutes);
 app.use('/api/colors', colorsRouter);
 
-// 🔹 Делаем папку uploads публичной (чтобы можно было загружать изображения)
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+// новый, правильный путь (будет работать за Traefik, т.к. у нас префикс /api → API)
+app.use('/api/uploads', express.static(UPLOAD_DIR));
+
+// оставить старый путь для обратной совместимости (по желанию)
+app.use('/uploads', express.static(UPLOAD_DIR));
 
 const start = async () => {
   try {
