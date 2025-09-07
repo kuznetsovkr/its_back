@@ -37,6 +37,7 @@ app.use('/api/uploads', express.static(UPLOAD_DIR));
 // оставить старый путь для обратной совместимости (по желанию)
 app.use('/uploads', express.static(UPLOAD_DIR));
 
+app.use('/api/payments/paykeeper', require('./routes/payments.paykeeper'));
 const start = async () => {
   try {
     await sequelize.authenticate();

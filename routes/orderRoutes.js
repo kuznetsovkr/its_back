@@ -274,6 +274,17 @@ router.post("/confirm/:orderId", async (req, res) => {
   }
 });
 
+router.get('/orders/:id', async (req, res) => {
+  const order = await Order.findByPk(req.params.id);
+  if (!order) return res.status(404).json({ message: 'Order not found' });
+  res.json({
+    id: order.id,
+    paymentStatus: order.paymentStatus,
+    status: order.status,
+    paidAt: order.paidAt,
+  });
+});
+
 
 
 module.exports = router;
