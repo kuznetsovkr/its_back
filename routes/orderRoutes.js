@@ -84,6 +84,7 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
                 comment: req.body.comment,
                 orderDate: new Date(),
                 status: "Ожидание оплаты",
+                paymentStatus: "pending",        // 👈 добавь
                 totalPrice: req.body.totalPrice ?? null,
                 deliveryAddress: req.body.deliveryAddress ?? null,
                 inventoryId: inv.id, // <-- ВАЖНО
@@ -252,6 +253,7 @@ router.post("/confirm/:orderId", async (req, res) => {
 
     // 4) Обновляем заказ
     order.status = "Оплачено";
+    order.paymentStatus = "paid";      // 👈 добавь
     order.paidAt = new Date();
     if (req.body.totalPrice) order.totalPrice = req.body.totalPrice;
     if (req.body.deliveryAddress) order.deliveryAddress = req.body.deliveryAddress;
@@ -274,16 +276,26 @@ router.post("/confirm/:orderId", async (req, res) => {
   }
 });
 
-router.get('/orders/:id', async (req, res) => {
-  const order = await Order.findByPk(req.params.id);
+// 👉 ДОЛЖЕН быть в самом конце файла, перед module.exports
+router.get('/:id', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ message: 'Bad id' });
+
+  const order = await Order.findByPk(id);
   if (!order) return res.status(404).json({ message: 'Order not found' });
+
+  // Отдаём только то, что нужно фронту
   res.json({
     id: order.id,
-    paymentStatus: order.paymentStatus,
-    status: order.status,
+    paymentStatus: order.paymentStatus || null, // 'pending' | 'paid' | 'failed'
+    status: order.status,                        // бизнес-статус
     paidAt: order.paidAt,
+    totalPrice: order.totalPrice,
+    paykeeperInvoiceId: order.paykeeperInvoiceId,
+    paykeeperPaymentId: order.paykeeperPaymentId,
   });
 });
+
 
 
 
