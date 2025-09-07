@@ -7,6 +7,8 @@ const Order = require('../models/Order');
 const { PAYKEEPER_SECRET_SEED } = process.env;
 const fmt2 = (n) => Number(n).toFixed(2);
 
+router.get('/ping', (_req, res) => res.json({ ok: true }));
+
 // 2.1 Получить ссылку на оплату (всегда 1 ₽)
 router.post('/link', async (req, res) => {
   try {

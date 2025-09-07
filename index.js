@@ -37,7 +37,11 @@ app.use('/api/uploads', express.static(UPLOAD_DIR));
 // оставить старый путь для обратной совместимости (по желанию)
 app.use('/uploads', express.static(UPLOAD_DIR));
 
-app.use('/api/payments/paykeeper', require('./routes/payments.paykeeper'));
+const paykeeperRouter = require('./routes/payments.paykeeper');
+app.use('/api/payments/paykeeper', paykeeperRouter); // когда префикс сохраняется
+app.use('/payments/paykeeper',     paykeeperRouter); // когда префикс срезан
+
+
 const start = async () => {
   try {
     await sequelize.authenticate();
