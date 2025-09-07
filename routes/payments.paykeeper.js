@@ -10,39 +10,29 @@ const fmt2 = (n) => Number(n).toFixed(2);
 router.get('/ping', (_req, res) => res.json({ ok: true }));
 
 // 2.1 Получить ссылку на оплату (всегда 1 ₽)
+// routes/payments.paykeeper.js
 router.post('/link', async (req, res) => {
   try {
     const { orderId } = req.body;
+    console.log('[PK] /link for orderId=', orderId);
     const order = await Order.findByPk(orderId);
     if (!order) return res.status(404).json({ message: 'Order not found' });
     if (order.paymentStatus === 'paid') return res.status(409).json({ message: 'Order already paid' });
 
-    // 👇 ХАРДКОДИМ 1 РУБЛЬ
     const pay_amount = fmt2(1);
     const clientid = [order.lastName, order.firstName, order.middleName].filter(Boolean).join(' ') || 'Покупатель';
-    const service_name = `Тестовая оплата заказа #${order.id}`;
     const orderid = String(order.id);
-    const client_phone = order.phone || '';
-    const client_email = ''; // если соберёшь email — подставишь
 
     const { invoice_id, pay_url } = await createInvoice({
-      pay_amount,
-      clientid,
-      orderid,
-      client_email,
-      client_phone,
-      service_name,
+      pay_amount, clientid, orderid,
+      client_email: '', client_phone: order.phone || '',
+      service_name: `Тестовая оплата заказа #${order.id}`,
     });
 
-    await order.update({
-      paymentProvider: 'paykeeper',
-      paymentStatus: 'pending',
-      paykeeperInvoiceId: invoice_id,
-    });
-
+    await order.update({ paymentProvider: 'paykeeper', paymentStatus: 'pending', paykeeperInvoiceId: invoice_id });
     res.json({ pay_url, invoice_id });
   } catch (e) {
-    console.error('paykeeper/link error', e?.response?.data || e);
+    console.error('[PK] /link error:', e.message);
     res.status(500).json({ message: 'Failed to create payment link' });
   }
 });
