@@ -11,11 +11,12 @@ const router = express.Router();
 const multer = require("multer");
 const fs = require("fs");
 const path = require("path");
+const OrderAttachment = require("../models/OrderAttachment");
 const { checkItemAndNotify } = require("../services/lowStockMonitor"); // путь подкорректируй, если нужен
 const { findInventoryForOrder } = require("../services/inventoryResolver");
 const { finalizePaidOrder } = require("../services/orderFinalizer");
 
-
+const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, "..", "uploads");
 const upload = multer({ dest: "uploads/" }); // временно сохраняем файлы
 
 // ✅ Создание заказа
@@ -105,6 +106,38 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
       deliveryAddress,
       inventoryId: inv.id,
     });
+
+    // 📎 Сохранить прикреплённые файлы как вложения заказа
+    try {
+    const orderDir = path.join(UPLOAD_DIR, "orders", String(order.id));
+    fs.mkdirSync(orderDir, { recursive: true });
+
+    const attachments = [];
+    for (const f of (req.files || [])) {
+        const ext = path.extname(f.originalname || "") || ".jpg";
+        const fileName = `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
+        const finalAbs = path.join(orderDir, fileName);
+
+        // переносим из временной папки multer
+        fs.renameSync(f.path, finalAbs);
+
+        attachments.push({
+        orderId: order.id,
+        path: finalAbs,              // абсолютный путь — удобно для fs.createReadStream
+        mime: f.mimetype,
+        originalName: f.originalname,
+        size: f.size,
+        });
+    }
+
+    if (attachments.length) {
+        await OrderAttachment.bulkCreate(attachments);
+    }
+    } catch (e) {
+    console.error("⚠️ Не удалось сохранить вложения заказа:", e);
+    // не роняем оформление — вложения опциональны
+    }
+
 
     console.log("✅ Заказ успешно сохранён в БД", order.id);
     res.json({ message: "Заказ успешно оформлен", orderId: order.id });

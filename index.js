@@ -14,6 +14,7 @@ const cron = require("node-cron");
 const { checkAllAndNotify } = require("./services/lowStockMonitor");
 require("./models/TelegramSubscriber"); // чтобы sync создал таблицу
 require("./bots/lowStockBot");          // запускаем long polling бота
+require("./models/OrderAttachment");
 
 
 const app = express();

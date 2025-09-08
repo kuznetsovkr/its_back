@@ -3,7 +3,7 @@ const FormData = require("form-data");
 const fs = require("fs");
 require("dotenv").config();
 
-const TelegramSubscriber = require("./models/TelegramSubscriber"); // ← модель подписчиков
+const TelegramSubscriber = require("./models/TelegramSubscriber");
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const ADMIN_CHAT = process.env.TELEGRAM_CHAT_ID || null;
@@ -12,26 +12,16 @@ if (!BOT_TOKEN) {
   console.warn("⚠️ TELEGRAM_BOT_TOKEN не задан в .env");
 }
 
-/**
- * Собираем список получателей:
- *  - ADMIN_CHAT из .env (если задан)
- *  - все активные подписчики из БД
- *  - опциональные chatId, переданные вызовом
- */
 async function getRecipients(extraChatIds = []) {
   const set = new Set();
-
   if (ADMIN_CHAT) set.add(String(ADMIN_CHAT));
-
   try {
     const subs = await TelegramSubscriber.findAll({ where: { isActive: true } });
     subs.forEach((s) => s.chatId && set.add(String(s.chatId)));
   } catch (e) {
     console.error("⚠️ Не удалось прочитать подписчиков:", e.message);
   }
-
   (extraChatIds || []).forEach((id) => id && set.add(String(id)));
-
   return Array.from(set);
 }
 
@@ -50,7 +40,6 @@ async function sendText(chatId, text) {
 
 async function sendPhoto(chatId, fileOrId, filename) {
   try {
-    // если передали file_id — можно отправлять как photo: file_id
     if (typeof fileOrId === "string" && !Buffer.isBuffer(fileOrId)) {
       await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, {
         chat_id: chatId,
@@ -58,8 +47,6 @@ async function sendPhoto(chatId, fileOrId, filename) {
       });
       return null;
     }
-
-    // иначе — буфер
     const form = new FormData();
     form.append("chat_id", chatId);
     form.append("photo", fileOrId, { filename: filename || "photo.jpg" });
@@ -70,7 +57,6 @@ async function sendPhoto(chatId, fileOrId, filename) {
       { headers: form.getHeaders() }
     );
 
-    // Вернём file_id — пригодится для следующих получателей
     const photos = resp?.data?.result?.photo || [];
     const best = photos[photos.length - 1];
     return best?.file_id || null;
@@ -80,86 +66,78 @@ async function sendPhoto(chatId, fileOrId, filename) {
   }
 }
 
+// Утилита для форматирования ФИО
+function fullName(o) {
+  return [o.lastName, o.firstName, o.middleName].filter(Boolean).join(" ").trim();
+}
+
 /**
- * Отправляет заказ в Telegram (текст + изображения) множеству получателей
- * @param {Object} order
- * @param {Object} [opts]
- * @param {string[]} [opts.extraChatIds] — доп. chatId адресатов
- * @param {boolean}  [opts.includeAdmin=true] — слать ли в админ-чат из .env
+ * Отправляет заказ в Telegram (текст + изображения)
+ * Поддерживает два варианта вызова:
+ *  - sendOrderToTelegram(order, attachmentsArray)
+ *  - sendOrderToTelegram(order, { extraChatIds, includeAdmin })
  */
-const sendOrderToTelegram = async (order, opts = {}) => {
-  const { extraChatIds = [], includeAdmin = true } = opts;
+const sendOrderToTelegram = async (order, attachmentsOrOpts = [], maybeOpts = {}) => {
+  let attachments = [];
+  let opts = {};
 
-  // 1) текст
-  const message =
-    `📦 *Новый заказ!*\n\n` +
-    `📅 Дата: ${new Date(order.orderDate).toLocaleString("ru-RU")}\n` +
-    `📞 Телефон: ${order.phone}\n` +
-    `👤 Получатель: ${order.fullName || "Не указано"}\n` +
-    `🛍️ Изделие: ${order.productType || "Не указано"}, ${order.color || "Не указано"}, ${order.size || "Не указано"}\n` +
-    `🎨 Вышивка: ${order.embroideryType || "Не указано"}\n` +
-    `🔤 Текст: ${order.customText || "-"}\n` +
-    `💬 Комментарий: ${order.comment || "Нет комментария"}\n` +
-    `📍 Адрес доставки: ${order.deliveryAddress || "Не указан"}\n` +
-    `💰 Стоимость заказа: ${order.totalPrice || "Не указана"}\n`;
-
-  // 2) список получателей
-  const recipients = await getRecipients(includeAdmin ? extraChatIds : extraChatIds.filter(() => true));
-  if (!includeAdmin && ADMIN_CHAT) {
-    // если выключили админ-чат — просто удалим его из списка (на случай, если getRecipients его добавил)
-    const idx = recipients.indexOf(String(ADMIN_CHAT));
-    if (idx >= 0) recipients.splice(idx, 1);
+  if (Array.isArray(attachmentsOrOpts)) {
+    attachments = attachmentsOrOpts;
+    opts = maybeOpts || {};
+  } else if (attachmentsOrOpts && typeof attachmentsOrOpts === "object") {
+    opts = attachmentsOrOpts;
   }
 
+  const { extraChatIds = [], includeAdmin = true } = opts;
+
+  const message =
+    `🧾 *Заказ #${order.id} — ОПЛАЧЕНО*\n` +
+    `👤 ${fullName(order) || "Не указано"}\n` +
+    `📞 ${order.phone || "-"}\n` +
+    `👕 ${order.productType || "-"} • ${order.color || "-"} • ${order.size || "-"}\n` +
+    (order.embroideryType ? `🧵 ${order.embroideryType}${order.customText ? ` — «${order.customText}»` : ""}\n` : "") +
+    `📦 ${order.deliveryAddress || "-"}\n` +
+    `💰 ${order.totalPrice ?? 0} ₽\n` +
+    (order.paidAt ? `⏱ ${new Date(order.paidAt).toLocaleString("ru-RU")}\n` : "");
+
+  // Список получателей
+  let recipients = await getRecipients(extraChatIds);
+  if (!includeAdmin && ADMIN_CHAT) {
+    recipients = recipients.filter((id) => id !== String(ADMIN_CHAT));
+  }
   if (!recipients.length) {
     console.warn("⚠️ Нет получателей для отправки заказа");
     return;
   }
 
-  // 3) подготовим фото в буферы один раз
+  // Подготовим фото:
+  // attachments: [{ path, mime, originalName, size, ... }]
   const photos = [];
-  if (order.images && Array.isArray(order.images)) {
-    for (const image of order.images) {
+  if (attachments.length) {
+    for (const att of attachments) {
       try {
-        const buffer = fs.readFileSync(image.path);
-        const filename = image.originalname || image.filename || "image.jpg";
-        photos.push({ buffer, filename, _path: image.path });
+        const buffer = fs.readFileSync(att.path);
+        const filename = att.originalName || att.filename || "image.jpg";
+        photos.push({ buffer, filename });
       } catch (e) {
-        console.warn("⚠️ Не удалось прочитать файл:", image.path, e.message);
+        console.warn("⚠️ Не удалось прочитать файл:", att.path, e.message);
       }
     }
   }
 
-  // 4) отправка всем получателям
-  //    чтобы не упасть по rate-limit, идём последовательно
-  //    оптимизация: отправили фото первому — получили file_id — и дальше шлём по file_id
+  // Рассылка: текст + фото (по одному), без удаления файлов (они постоянные)
   for (const chatId of recipients) {
     await sendText(chatId, message);
 
-    // фото (если были)
-    let cachedFileIds = []; // запомним file_id для текущей рассылки
+    let cachedFileIds = [];
     for (let i = 0; i < photos.length; i++) {
       const p = photos[i];
-
-      // если file_id уже есть — шлём его
       if (cachedFileIds[i]) {
         await sendPhoto(chatId, cachedFileIds[i]);
         continue;
       }
-
-      // иначе — шлём буфер и забираем file_id
       const fileId = await sendPhoto(chatId, p.buffer, p.filename);
       if (fileId) cachedFileIds[i] = fileId;
-    }
-  }
-
-  // 5) удаляем временные файлы ОДИН раз, после рассылки
-  for (const p of photos) {
-    if (p._path) {
-      fs.unlink(p._path, (err) => {
-        if (err) console.warn("⚠️ Не удалось удалить временный файл:", p._path);
-        else console.log("🧹 Временный файл удалён:", p._path);
-      });
     }
   }
 };
