@@ -13,6 +13,7 @@ const fs = require("fs");
 const path = require("path");
 const { checkItemAndNotify } = require("../services/lowStockMonitor"); // путь подкорректируй, если нужен
 const { findInventoryForOrder } = require("../services/inventoryResolver");
+const { finalizePaidOrder } = require("../services/orderFinalizer");
 
 
 const upload = multer({ dest: "uploads/" }); // временно сохраняем файлы
@@ -91,24 +92,6 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
             });
 
         console.log("✅ Заказ успешно сохранён в БД", order);
-
-        // ✅ Отправляем заказ в Telegram
-        await sendOrderToTelegram({
-            orderDate: order.orderDate,
-            phone: order.phone,
-            fullName: `${order.lastName} ${order.firstName} ${order.middleName}`,
-            productType: req.body.productType,
-            color: req.body.color,
-            size: req.body.size,
-            embroideryType: req.body.embroideryType,
-            customText: req.body.customText,
-            comment: req.body.comment,
-            totalPrice: req.body.totalPrice, 
-            deliveryAddress: req.body.deliveryAddress, 
-            images: req.files, // массив файлов
-        });        
-
-        console.log("✅ Заказ успешно отправлен в Telegram");
 
         res.json({ message: "Заказ успешно оформлен", orderId: order.id });
     } catch (error) {
@@ -202,77 +185,22 @@ router.get("/all", async (req, res) => {
 // POST /api/orders/confirm/:orderId
 router.post("/confirm/:orderId", async (req, res) => {
   const { orderId } = req.params;
-  const { provider = "manual", eventId = `manual-${orderId}` } = req.body || {};
+  const { provider = "manual", eventId, totalPrice, deliveryAddress } = req.body || {};
 
-  const t = await sequelize.transaction();
   try {
-    // 1) Idempotency
-    await PaymentEvent.findOrCreate({
-      where: { eventId },
-      defaults: { provider, orderId, payload: req.body || {} },
-      transaction: t,
+    const result = await finalizePaidOrder({
+      orderId,
+      provider,
+      eventId: eventId || `${provider}-${orderId}`,
+      overrides: { totalPrice, deliveryAddress },
     });
 
-    // 2) Лочим заказ
-    const order = await Order.findByPk(orderId, { transaction: t, lock: t.LOCK.UPDATE });
-    if (!order) {
-      await t.rollback();
-      return res.status(404).json({ message: "Заказ не найден" });
+    if (!result.ok && result.message) {
+      return res.status(409).json({ message: result.message });
     }
-
-    if (order.status === "Оплачено") {
-      await t.commit();
-      return res.json({ ok: true, alreadyProcessed: true });
-    }
-
-    // 3) Лочим строку склада и списываем 1 шт
-
-    let item;
-
-    if (order.inventoryId) {
-    item = await Inventory.findByPk(order.inventoryId, { transaction: t, lock: t.LOCK.UPDATE });
-    } else {
-    // резерв для старых заказов без inventoryId
-    const { findInventoryForOrder } = require("../services/inventoryResolver");
-    item = await findInventoryForOrder(order.productType, order.color, order.size);
-    if (item) {
-        order.inventoryId = item.id;
-        await order.save({ transaction: t });
-    }
-    }
-
-    if (!item || item.quantity < 1) {
-    throw new Error("Недостаточно товара на складе");
-    }
-
-    item.quantity = Math.max(0, item.quantity - 1);
-    await item.save({ transaction: t });
-
-    console.log("[CONFIRM]", { orderId, inventoryId: item.id, newQty: item.quantity });
-
-
-    // 4) Обновляем заказ
-    order.status = "Оплачено";
-    order.paymentStatus = "paid";      // 👈 добавь
-    order.paidAt = new Date();
-    if (req.body.totalPrice) order.totalPrice = req.body.totalPrice;
-    if (req.body.deliveryAddress) order.deliveryAddress = req.body.deliveryAddress;
-    await order.save({ transaction: t });
-
-    await t.commit();
-
-    // ⬇️ После коммита — запускаем проверку остатка (не ломаем ответ, если телега упадёт)
-    try {
-      await checkItemAndNotify(item.id);
-    } catch (notifyErr) {
-      console.error("Low-stock notify error:", notifyErr);
-    }
-
-    res.json({ ok: true });
+    return res.json({ ok: true, alreadyProcessed: !!result.alreadyProcessed });
   } catch (e) {
-    await t.rollback();
-    console.error("❌ Ошибка confirm:", e);
-    res.status(409).json({ message: e.message });
+    return res.status(409).json({ message: e.message });
   }
 });
 

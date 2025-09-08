@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const router = express.Router();
 const { createInvoice } = require('../lib/paykeeper');
 const Order = require('../models/Order');
+const { finalizePaidOrder } = require('../services/orderFinalizer');
 
 const { PAYKEEPER_SECRET_SEED } = process.env;
 const fmt2 = (n) => Number(n).toFixed(2);
@@ -42,10 +43,9 @@ router.post('/callback', express.urlencoded({ extended: false }), async (req, re
   try {
     const { id, sum, clientid = '', orderid = '', key } = req.body;
 
-    // Проверка подписи: md5(id + number_format(sum,2,'.','') + clientid + orderid + secret)
-    const expected = crypto.createHash('md5').update(
-      String(id) + fmt2(sum) + String(clientid) + String(orderid) + PAYKEEPER_SECRET_SEED
-    ).digest('hex');
+    const expected = crypto.createHash('md5')
+      .update(String(id) + fmt2(sum) + String(clientid) + String(orderid) + PAYKEEPER_SECRET_SEED)
+      .digest('hex');
 
     if (key !== expected) {
       console.warn('PayKeeper webhook: bad signature', { body: req.body, expected });
@@ -55,24 +55,32 @@ router.post('/callback', express.urlencoded({ extended: false }), async (req, re
     const order = await Order.findByPk(orderid);
     if (!order) return res.status(404).send('Order not found');
 
-    // Для теста можно не проверять сумму, но лучше оставить сверку:
+    // сумму можно сверять жёстко (ты пока оставил варнинг — ок)
     if (fmt2(sum) !== fmt2(1)) {
       console.warn('PayKeeper webhook: sum mismatch', { orderid, sum });
-      // можно принять оплату, но зафиксировать как failed/attention, решай сам
-      // return res.status(400).send('Error! Sum mismatch');
     }
 
+    // помечаем как paid (но статус НЕ трогаем)
     if (order.paymentStatus !== 'paid') {
       await order.update({
         paymentStatus: 'paid',
         paykeeperPaymentId: id,
         paidAt: new Date(),
-        status: 'Оплачено', // если хочешь синхронизировать бизнес-статус
       });
-      // тут твоя бизнес-логика: минусуем остатки, телеграм и т.д.
     }
 
-    // Обязательный ответ: OK md5(id + secret)
+    // финализация (списание, статус, low-stock, Telegram) — идемпотентна
+    try {
+      await finalizePaidOrder({
+        orderId: order.id,
+        provider: 'paykeeper',
+        eventId: `pk-${id}`,
+      });
+    } catch (e) {
+      // финализация может упасть (например, нет остатка) — оплату приняли, но ты узнаешь из логов и телеги админа
+      console.error('Finalize after PayKeeper webhook failed:', e);
+    }
+
     const okHash = crypto.createHash('md5').update(String(id) + PAYKEEPER_SECRET_SEED).digest('hex');
     return res.send(`OK ${okHash}`);
   } catch (e) {
