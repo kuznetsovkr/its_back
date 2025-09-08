@@ -66,6 +66,10 @@ async function sendPhoto(chatId, fileOrId, filename) {
   }
 }
 
+// Простейшее экранирование для Markdown (не V2)
+const md = (s) => String(s ?? '')
+ .replace(/([_*[\]()])/g, '\\$1'); // экранируем самые частые спецсимволы
+
 // Утилита для форматирования ФИО
 function fullName(o) {
   return [o.lastName, o.firstName, o.middleName].filter(Boolean).join(" ").trim();
@@ -92,13 +96,17 @@ const sendOrderToTelegram = async (order, attachmentsOrOpts = [], maybeOpts = {}
 
   const message =
     `🧾 *Заказ #${order.id} — ОПЛАЧЕНО*\n` +
-    `👤 ${fullName(order) || "Не указано"}\n` +
-    `📞 ${order.phone || "-"}\n` +
-    `👕 ${order.productType || "-"} • ${order.color || "-"} • ${order.size || "-"}\n` +
-    (order.embroideryType ? `🧵 ${order.embroideryType}${order.customText ? ` — «${order.customText}»` : ""}\n` : "") +
-    `📦 ${order.deliveryAddress || "-"}\n` +
+    `👤 ${md(fullName(order)) || "Не указано"}\n` +
+    `📞 ${md(order.phone || "-")}\n` +
+    `👕 ${md(order.productType || "-")} • ${md(order.color || "-")} • ${md(order.size || "-")}\n` +
+    (order.embroideryType
+      ? `🧵 ${md(order.embroideryType)}${order.customText ? ` — «${md(order.customText)}»` : ""}\n`
+      : ""
+    ) +
+    `💬 Комментарий: ${md((order.comment || "").trim()) || "-" }\n` +  
+    `📦 ${md(order.deliveryAddress || "-")}\n` +
     `💰 ${order.totalPrice ?? 0} ₽\n` +
-    (order.paidAt ? `⏱ ${new Date(order.paidAt).toLocaleString("ru-RU")}\n` : "");
+    (order.paidAt ? `⏱ ${md(new Date(order.paidAt).toLocaleString("ru-RU"))}\n` : "");
 
   // Список получателей
   let recipients = await getRecipients(extraChatIds);
