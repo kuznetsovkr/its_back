@@ -43,6 +43,12 @@ router.post('/callback', express.urlencoded({ extended: false }), async (req, re
   try {
     const { id, sum, clientid = '', orderid = '', key } = req.body;
 
+    const parsedOrderId = Number.parseInt(orderid, 10);
+    if (!Number.isInteger(parsedOrderId) || parsedOrderId <= 0) {
+      console.warn('PayKeeper webhook: bad orderid', { orderid });
+      return res.status(400).send('Error! Bad orderid');
+    }
+
     const expected = crypto.createHash('md5')
       .update(String(id) + fmt2(sum) + String(clientid) + String(orderid) + PAYKEEPER_SECRET_SEED)
       .digest('hex');
@@ -52,7 +58,7 @@ router.post('/callback', express.urlencoded({ extended: false }), async (req, re
       return res.status(400).send('Error! Hash mismatch');
     }
 
-    const order = await Order.findByPk(orderid);
+    const order = await Order.findByPk(parsedOrderId);
     if (!order) return res.status(404).send('Order not found');
 
     // сумму можно сверять жёстко (ты пока оставил варнинг — ок)

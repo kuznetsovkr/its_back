@@ -20,84 +20,98 @@ const upload = multer({ dest: "uploads/" }); // временно сохраня�
 
 // ✅ Создание заказа
 router.post("/create", upload.array("images", 10), async (req, res) => {
-    try {
-        const authHeader = req.headers.authorization;
-        console.log("🔑 Заголовок Authorization:", authHeader);
+  try {
+    const authHeader = req.headers.authorization;
+    console.log("🔑 Заголовок Authorization:", authHeader);
 
-        let user = null;
-        if (authHeader) {
-            try {
-                const token = authHeader.split(" ")[1];
-                user = jwt.verify(token, process.env.JWT_SECRET);
-                console.log("👤 Пользователь авторизован:", user);
-            } catch (error) {
-                console.warn("⚠️ Ошибка при верификации токена:", error.message);
-            }
-        }
-
-        let userData;
-        if (user) {
-            userData = await User.findByPk(user.id);
-            console.log("✅ Данные авторизованного пользователя:", userData);
-        } else {
-            console.log("⚠️ Пользователь не авторизован, используем данные из запроса.");
-            userData = {
-                firstName: req.body.firstName || "Не указано",
-                lastName: req.body.lastName || "Не указано",
-                middleName: req.body.middleName || "",
-                phone: req.body.phone || "Не указано",
-            };
-        }
-
-        console.log("📦 Создание заказа с данными:", {
-            ...userData,
-            productType: req.body.productType,
-            color: req.body.color,
-            size: req.body.size,
-            embroideryType: req.body.embroideryType,
-            customText: req.body.customText,
-            comment: req.body.comment,
-        });
-
-        const inv = await findInventoryForOrder(req.body.productType, req.body.color, req.body.size);
-
-        if (!inv) {
-        console.error("[CREATE] inventory NOT FOUND for:", req.body.productType, req.body.color, req.body.size);
-        return res.status(400).json({ message: "Комбинация товара на складе не найдена" });
-        }
-        if (inv.quantity < 1) {
-        console.error("[CREATE] not enough stock id=", inv.id, "qty=", inv.quantity);
-        return res.status(409).json({ message: "Недостаточно товара на складе" });
-        }
-
-        // ✅ Создаём заказ в БД
-            const order = await Order.create({
-                userId: user?.id || null,
-                phone: userData.phone,
-                firstName: userData.firstName,
-                lastName: userData.lastName,
-                middleName: userData.middleName,
-                productType: req.body.productType,
-                color: req.body.color,
-                size: req.body.size,
-                embroideryType: req.body.embroideryType,
-                customText: req.body.customText,
-                comment: req.body.comment,
-                orderDate: new Date(),
-                status: "Ожидание оплаты",
-                paymentStatus: "pending",        // 👈 добавь
-                totalPrice: req.body.totalPrice ?? null,
-                deliveryAddress: req.body.deliveryAddress ?? null,
-                inventoryId: inv.id, // <-- ВАЖНО
-            });
-
-        console.log("✅ Заказ успешно сохранён в БД", order);
-
-        res.json({ message: "Заказ успешно оформлен", orderId: order.id });
-    } catch (error) {
-        console.error("❌ Ошибка оформления заказа:", error);
-        res.status(500).json({ message: "Ошибка оформления заказа", error: error.message });
+    // 1) Авторизация (как было)
+    let user = null;
+    if (authHeader) {
+      try {
+        const token = authHeader.split(" ")[1];
+        user = jwt.verify(token, process.env.JWT_SECRET);
+        console.log("👤 Пользователь авторизован:", user);
+      } catch (error) {
+        console.warn("⚠️ Ошибка при верификации токена:", error.message);
+      }
     }
+
+    // 2) Забираем профиль (если есть)
+    let profile = null;
+    if (user) {
+      profile = await User.findByPk(user.id, { raw: true });
+      console.log("✅ Данные авторизованного пользователя:", profile);
+    } else {
+      console.log("⚠️ Пользователь не авторизован, используем данные из запроса.");
+    }
+
+    // 3) Поля формы (multer кладёт строки в req.body)
+    const body = req.body || {};
+    const safe = (v) => (v == null ? "" : String(v));
+
+    // ⬇️ Приоритет: formData → профиль → пусто
+    const firstName       = safe(body.firstName)   || safe(profile?.firstName);
+    const lastName        = safe(body.lastName)    || safe(profile?.lastName);
+    const middleName      = safe(body.middleName)  || safe(profile?.middleName);
+    const phone           = safe(body.phone)       || safe(profile?.phone);
+    const productType     = safe(body.productType);
+    const color           = safe(body.color);
+    const size            = safe(body.size);
+    const embroideryType  = safe(body.embroideryType);
+    const customText      = safe(body.customText);
+    const comment         = safe(body.comment);
+    const deliveryAddress = safe(body.deliveryAddress);
+    const totalPrice      = Number(body.totalPrice) || 0;
+
+    // 4) Мини-валидация, чтобы не ловить notNull на модели
+    if (!firstName || !lastName) {
+      return res.status(400).json({ message: "Введите фамилию и имя" });
+    }
+
+    console.log("📦 Создание заказа с данными:", {
+      id: user?.id || null,
+      firstName, lastName, middleName, phone,
+      productType, color, size, embroideryType, customText, comment,
+    });
+
+    // 5) Проверяем наличие на складе
+    const inv = await findInventoryForOrder(productType, color, size);
+    if (!inv) {
+      console.error("[CREATE] inventory NOT FOUND for:", productType, color, size);
+      return res.status(400).json({ message: "Комбинация товара на складе не найдена" });
+    }
+    if (inv.quantity < 1) {
+      console.error("[CREATE] not enough stock id=", inv.id, "qty=", inv.quantity);
+      return res.status(409).json({ message: "Недостаточно товара на складе" });
+    }
+
+    // 6) Создаём заказ
+    const order = await Order.create({
+      userId: user?.id || null,
+      phone,
+      firstName,
+      lastName,
+      middleName,
+      productType,
+      color,
+      size,
+      embroideryType,
+      customText,
+      comment,
+      orderDate: new Date(),
+      status: "Ожидание оплаты",
+      paymentStatus: "pending",
+      totalPrice,
+      deliveryAddress,
+      inventoryId: inv.id,
+    });
+
+    console.log("✅ Заказ успешно сохранён в БД", order.id);
+    res.json({ message: "Заказ успешно оформлен", orderId: order.id });
+  } catch (error) {
+    console.error("❌ Ошибка оформления заказа:", error);
+    res.status(500).json({ message: "Ошибка оформления заказа", error: error.message });
+  }
 });
 router.put("/update-status/:orderId", async (req, res) => {
     try {
