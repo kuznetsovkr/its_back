@@ -133,19 +133,31 @@ const sendOrderToTelegram = async (order, attachmentsOrOpts = [], maybeOpts = {}
     }
   }
 
-  // Рассылка: текст + фото (по одному), без удаления файлов (они постоянные)
-  for (const chatId of recipients) {
+  // Рассылка: сначала первому получателю заливаем фото "по-настоящему",
+  // получаем file_id, потом всем остальным шлём уже по file_id
+  let cachedFileIds; // будет инициализирован на первой итерации
+
+  for (let idx = 0; idx < recipients.length; idx++) {
+    const chatId = recipients[idx];
     await sendText(chatId, message);
 
-    let cachedFileIds = [];
-    for (let i = 0; i < photos.length; i++) {
-      const p = photos[i];
-      if (cachedFileIds[i]) {
-        await sendPhoto(chatId, cachedFileIds[i]);
-        continue;
+    // если фото нет — просто дальше
+    if (!photos.length) continue;
+
+    if (idx === 0) {
+      // Первый получатель: загружаем файлы и собираем file_id
+      cachedFileIds = [];
+      for (let i = 0; i < photos.length; i++) {
+        const p = photos[i];
+        const fileId = await sendPhoto(chatId, p.buffer, p.filename);
+        if (fileId) cachedFileIds[i] = fileId;
       }
-      const fileId = await sendPhoto(chatId, p.buffer, p.filename);
-      if (fileId) cachedFileIds[i] = fileId;
+    } else {
+      // Остальным: отправляем уже сохранённые file_id
+      for (let i = 0; i < (cachedFileIds?.length || 0); i++) {
+        const fileId = cachedFileIds[i];
+        if (fileId) await sendPhoto(chatId, fileId);
+      }
     }
   }
 };
