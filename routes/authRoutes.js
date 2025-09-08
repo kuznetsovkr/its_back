@@ -36,12 +36,11 @@ router.post("/request-sms", async (req, res) => {
         return res.json({ message: "Введите пароль" });
     }
 
-    const smsCode = Math.floor(100000 + Math.random() * 900000);
+    const smsCode = Math.floor(1000 + Math.random() * 9000);
     smsCodes.set(normalizedPhone, smsCode);
-
     console.log(`📞 СМС-код для ${normalizedPhone}: ${smsCode}`);
 
-    return res.json({ message: "Код сгенерирован и выведен в консоль" });
+    return res.json({ message: "Код сгенерирован (dev)", debugCode: smsCode });
 });
 
 //  Авторизация по SMS-коду
