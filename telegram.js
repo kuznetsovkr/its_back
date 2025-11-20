@@ -72,6 +72,17 @@ const md = (s) => String(s ?? "")
 
 const fullName = (o) => [o.lastName, o.firstName, o.middleName].filter(Boolean).join(" ").trim();
 
+const EMBROIDERY_LABELS = {
+  petFace: "Мордочка питомца",
+  patronus: "Патронус",
+};
+
+const embroideryLabel = (order) => {
+  if (order.embroideryTypeRu) return order.embroideryTypeRu;
+  const key = String(order.embroideryType || "").trim();
+  return EMBROIDERY_LABELS[key] || key || "-";
+};
+
 const formatPhone = (phone) => {
   const digits = String(phone || "").replace(/\D+/g, "");
   if (!digits) return "-";
@@ -111,7 +122,7 @@ const sendOrderToTelegram = async (order, attachmentsOrOpts = [], maybeOpts = {}
   const { extraChatIds = [], includeAdmin = true } = opts;
 
   const comment = (order.comment || "").trim();
-  const embroideryLabel = order.embroideryTypeRu || order.embroideryType || "-";
+  const embroidery = embroideryLabel(order);
   const counts = [];
   if (Number.isFinite(order.patronusCount) && order.patronusCount > 0) counts.push(`патронусов: ${order.patronusCount}`);
   if (Number.isFinite(order.petFaceCount) && order.petFaceCount > 0) counts.push(`мордашек: ${order.petFaceCount}`);
@@ -122,8 +133,8 @@ const sendOrderToTelegram = async (order, attachmentsOrOpts = [], maybeOpts = {}
     `👤 ${md(fullName(order)) || "Имя не указано"}\n` +
     `📞 ${md(formatPhone(order.phone))}\n` +
     `🧥 ${md(order.productType || "-")} • ${md(order.color || "-")} • ${md(order.size || "-")}\n` +
-    (embroideryLabel
-      ? `🧵 ${md(embroideryLabel)}${countsStr}${order.customText ? ` «${md(order.customText)}»` : ""}\n`
+    (embroidery
+      ? `🧵 ${md(embroidery)}${countsStr}${order.customText ? ` «${md(order.customText)}»` : ""}\n`
       : ""
     ) +
     `📍 ${md(order.deliveryAddress || "-")}\n` +
