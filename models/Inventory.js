@@ -1,5 +1,6 @@
 const { DataTypes } = require("sequelize");
 const sequelize = require("../db");
+const ClothingType = require("./ClothingType");
 
 const Inventory = sequelize.define("inventory", {
     id: {
@@ -19,6 +20,15 @@ const Inventory = sequelize.define("inventory", {
         type: DataTypes.STRING,
         allowNull: false,
     },
+    clothingTypeId: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+        references: {
+            model: "clothingTypes",
+            key: "id",
+        },
+        onDelete: "SET NULL",
+    },
     quantity: {
         type: DataTypes.INTEGER,
         allowNull: false,
@@ -33,6 +43,11 @@ const Inventory = sequelize.define("inventory", {
         allowNull: true,
     },
 }, {indexes: [{ unique: true, fields: ["productType", "color", "size"] }],
+});
+
+Inventory.belongsTo(ClothingType, {
+    foreignKey: "clothingTypeId",
+    as: "clothingType",
 });
 
 module.exports = Inventory;

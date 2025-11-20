@@ -8,6 +8,7 @@ const userRoutes = require("./routes/userRoutes");
 const authRoutes = require("./routes/authRoutes");
 const orderRoutes = require("./routes/orderRoutes");
 const inventoryRoutes = require("./routes/inventoryRoutes");
+const clothingTypeRoutes = require("./routes/clothingTypeRoutes");
 const uploadRoutes = require("./routes/uploadRoutes");
 const colorsRouter = require('./routes/colors');
 const cron = require("node-cron");
@@ -30,6 +31,7 @@ app.use("/api/orders", orderRoutes);
 app.use("/api/cdek", cdekRoutes);
 app.use("/api/user", userRoutes);
 app.use("/api/inventory", inventoryRoutes);
+app.use("/api/clothing-types", clothingTypeRoutes);
 app.use("/api/upload", uploadRoutes);
 app.use('/api/colors', colorsRouter);
 
