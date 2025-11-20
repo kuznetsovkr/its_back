@@ -49,20 +49,27 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
     // 3) Поля формы (multer кладёт строки в req.body)
     const body = req.body || {};
     const safe = (v) => (v == null ? "" : String(v));
+    const toNumberOrNull = (v) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
 
     // ⬇️ Приоритет: formData → профиль → пусто
-    const firstName       = safe(body.firstName)   || safe(profile?.firstName);
-    const lastName        = safe(body.lastName)    || safe(profile?.lastName);
-    const middleName      = safe(body.middleName)  || safe(profile?.middleName);
-    const phone           = safe(body.phone)       || safe(profile?.phone);
-    const productType     = safe(body.productType);
-    const color           = safe(body.color);
-    const size            = safe(body.size);
-    const embroideryType  = safe(body.embroideryType);
-    const customText      = safe(body.customText);
-    const comment         = safe(body.comment);
-    const deliveryAddress = safe(body.deliveryAddress);
-    const totalPrice      = Number(body.totalPrice) || 0;
+    const firstName        = safe(body.firstName)   || safe(profile?.firstName);
+    const lastName         = safe(body.lastName)    || safe(profile?.lastName);
+    const middleName       = safe(body.middleName)  || safe(profile?.middleName);
+    const phone            = safe(body.phone)       || safe(profile?.phone);
+    const productType      = safe(body.productType);
+    const color            = safe(body.color);
+    const size             = safe(body.size);
+    const embroideryType   = safe(body.embroideryType);
+    const embroideryTypeRu = safe(body.embroideryTypeRu);
+    const patronusCount    = toNumberOrNull(body.patronusCount);
+    const petFaceCount     = toNumberOrNull(body.petFaceCount);
+    const customText       = safe(body.customText);
+    const comment          = safe(body.comment);
+    const deliveryAddress  = safe(body.deliveryAddress);
+    const totalPrice       = Number(body.totalPrice) || 0;
 
     // 4) Мини-валидация, чтобы не ловить notNull на модели
     if (!firstName || !lastName) {
@@ -97,6 +104,9 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
       color,
       size,
       embroideryType,
+      embroideryTypeRu,
+      patronusCount,
+      petFaceCount,
       customText,
       comment,
       orderDate: new Date(),

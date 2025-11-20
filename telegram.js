@@ -72,6 +72,28 @@ const md = (s) => String(s ?? "")
 
 const fullName = (o) => [o.lastName, o.firstName, o.middleName].filter(Boolean).join(" ").trim();
 
+const formatPhone = (phone) => {
+  const digits = String(phone || "").replace(/\D+/g, "");
+  if (!digits) return "-";
+  return digits.startsWith("7") ? `+${digits}` : `+7${digits}`;
+};
+
+const formatPaidAt = (ts) => {
+  if (!ts) return "";
+  try {
+    return new Intl.DateTimeFormat("ru-RU", {
+      timeZone: "Asia/Krasnoyarsk",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(new Date(ts));
+  } catch (e) {
+    return new Date(ts).toLocaleString("ru-RU");
+  }
+};
+
 /**
  * Отправляет заказ в Telegram (основная инфа + комментарий + медиа)
  */
@@ -89,18 +111,24 @@ const sendOrderToTelegram = async (order, attachmentsOrOpts = [], maybeOpts = {}
   const { extraChatIds = [], includeAdmin = true } = opts;
 
   const comment = (order.comment || "").trim();
+  const embroideryLabel = order.embroideryTypeRu || order.embroideryType || "-";
+  const counts = [];
+  if (Number.isFinite(order.patronusCount) && order.patronusCount > 0) counts.push(`патронусов: ${order.patronusCount}`);
+  if (Number.isFinite(order.petFaceCount) && order.petFaceCount > 0) counts.push(`мордашек: ${order.petFaceCount}`);
+  const countsStr = counts.length ? ` (${md(counts.join(", "))})` : "";
+
   const mainMessage =
     `🧾 *Заказ #${order.id} — новый*\n` +
     `👤 ${md(fullName(order)) || "Имя не указано"}\n` +
-    `📞 ${md(order.phone || "-")}\n` +
+    `📞 ${md(formatPhone(order.phone))}\n` +
     `🧥 ${md(order.productType || "-")} • ${md(order.color || "-")} • ${md(order.size || "-")}\n` +
-    (order.embroideryType
-      ? `🧵 ${md(order.embroideryType)}${order.customText ? ` «${md(order.customText)}»` : ""}\n`
+    (embroideryLabel
+      ? `🧵 ${md(embroideryLabel)}${countsStr}${order.customText ? ` «${md(order.customText)}»` : ""}\n`
       : ""
     ) +
     `📍 ${md(order.deliveryAddress || "-")}\n` +
     `💰 ${order.totalPrice ?? 0} ₽\n` +
-    (order.paidAt ? `✅ Оплачен: ${md(new Date(order.paidAt).toLocaleString("ru-RU"))}\n` : "");
+    (order.paidAt ? `✅ Оплачен: ${md(formatPaidAt(order.paidAt))}\n` : "");
 
   const commentMessage = comment ? `💬 Комментарий:\n${md(comment)}` : null;
 
