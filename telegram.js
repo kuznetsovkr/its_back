@@ -124,8 +124,11 @@ const sendOrderToTelegram = async (order, attachmentsOrOpts = [], maybeOpts = {}
   const comment = (order.comment || "").trim();
   const embroidery = embroideryLabel(order);
   const counts = [];
-  if (Number.isFinite(order.patronusCount) && order.patronusCount > 0) counts.push(`патронусов: ${order.patronusCount}`);
-  if (Number.isFinite(order.petFaceCount) && order.petFaceCount > 0) counts.push(`мордашек: ${order.petFaceCount}`);
+  const hasPatronus = Number.isFinite(order.patronusCount) && order.patronusCount > 0;
+  const hasPetFace  = Number.isFinite(order.petFaceCount) && order.petFaceCount > 0;
+  if (hasPatronus) counts.push(`патронусов: ${order.patronusCount}`);
+  // если задан Патронус, мордашки не показываем
+  if (!hasPatronus && hasPetFace) counts.push(`мордашек: ${order.petFaceCount}`);
   const countsStr = counts.length ? ` (${md(counts.join(", "))})` : "";
 
   const mainMessage =
