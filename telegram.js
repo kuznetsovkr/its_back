@@ -9,7 +9,7 @@ const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const ADMIN_CHAT = process.env.TELEGRAM_CHAT_ID || null;
 
 if (!BOT_TOKEN) {
-  console.warn("⚠️ TELEGRAM_BOT_TOKEN не задан в .env");
+  console.warn("Пустой TELEGRAM_BOT_TOKEN в .env");
 }
 
 async function getRecipients(extraChatIds = []) {
@@ -19,7 +19,7 @@ async function getRecipients(extraChatIds = []) {
     const subs = await TelegramSubscriber.findAll({ where: { isActive: true } });
     subs.forEach((s) => s.chatId && set.add(String(s.chatId)));
   } catch (e) {
-    console.error("⚠️ Не удалось прочитать подписчиков:", e.message);
+    console.error("Ошибка чтения подписчиков Telegram:", e.message);
   }
   (extraChatIds || []).forEach((id) => id && set.add(String(id)));
   return Array.from(set);
@@ -34,7 +34,7 @@ async function sendText(chatId, text) {
       disable_web_page_preview: true,
     });
   } catch (e) {
-    console.error(`❌ sendMessage(${chatId}) error:`, e.response?.data || e.message);
+    console.error(`TG sendMessage(${chatId}) error:`, e.response?.data || e.message);
   }
 }
 
@@ -61,25 +61,19 @@ async function sendPhoto(chatId, fileOrId, filename) {
     const best = photos[photos.length - 1];
     return best?.file_id || null;
   } catch (e) {
-    console.error(`❌ sendPhoto(${chatId}) error:`, e.response?.data || e.message);
+    console.error(`TG sendPhoto(${chatId}) error:`, e.response?.data || e.message);
     return null;
   }
 }
 
-// Простейшее экранирование для Markdown (не V2)
-const md = (s) => String(s ?? '')
- .replace(/([_*[\]()])/g, '\\$1'); // экранируем самые частые спецсимволы
+// Экранировать для Markdown V2
+const md = (s) => String(s ?? "")
+  .replace(/([_*[\]()])/g, "\\$1");
 
-// Утилита для форматирования ФИО
-function fullName(o) {
-  return [o.lastName, o.firstName, o.middleName].filter(Boolean).join(" ").trim();
-}
+const fullName = (o) => [o.lastName, o.firstName, o.middleName].filter(Boolean).join(" ").trim();
 
 /**
- * Отправляет заказ в Telegram (текст + изображения)
- * Поддерживает два варианта вызова:
- *  - sendOrderToTelegram(order, attachmentsArray)
- *  - sendOrderToTelegram(order, { extraChatIds, includeAdmin })
+ * Отправляет заказ в Telegram (основная инфа + комментарий + медиа)
  */
 const sendOrderToTelegram = async (order, attachmentsOrOpts = [], maybeOpts = {}) => {
   let attachments = [];
@@ -94,31 +88,31 @@ const sendOrderToTelegram = async (order, attachmentsOrOpts = [], maybeOpts = {}
 
   const { extraChatIds = [], includeAdmin = true } = opts;
 
-  const message =
-    `🧾 *Заказ #${order.id} — ОПЛАЧЕНО*\n` +
-    `👤 ${md(fullName(order)) || "Не указано"}\n` +
+  const comment = (order.comment || "").trim();
+  const mainMessage =
+    `🧾 *Заказ #${order.id} — новый*\n` +
+    `👤 ${md(fullName(order)) || "Имя не указано"}\n` +
     `📞 ${md(order.phone || "-")}\n` +
-    `👕 ${md(order.productType || "-")} • ${md(order.color || "-")} • ${md(order.size || "-")}\n` +
+    `🧥 ${md(order.productType || "-")} • ${md(order.color || "-")} • ${md(order.size || "-")}\n` +
     (order.embroideryType
-      ? `🧵 ${md(order.embroideryType)}${order.customText ? ` — «${md(order.customText)}»` : ""}\n`
+      ? `🧵 ${md(order.embroideryType)}${order.customText ? ` «${md(order.customText)}»` : ""}\n`
       : ""
     ) +
-    `💬 Комментарий: ${md((order.comment || "").trim()) || "-" }\n` +  
-    `📦 ${md(order.deliveryAddress || "-")}\n` +
+    `📍 ${md(order.deliveryAddress || "-")}\n` +
     `💰 ${order.totalPrice ?? 0} ₽\n` +
-    (order.paidAt ? `⏱ ${md(new Date(order.paidAt).toLocaleString("ru-RU"))}\n` : "");
+    (order.paidAt ? `✅ Оплачен: ${md(new Date(order.paidAt).toLocaleString("ru-RU"))}\n` : "");
 
-  // Список получателей
+  const commentMessage = comment ? `💬 Комментарий:\n${md(comment)}` : null;
+
   let recipients = await getRecipients(extraChatIds);
   if (!includeAdmin && ADMIN_CHAT) {
     recipients = recipients.filter((id) => id !== String(ADMIN_CHAT));
   }
   if (!recipients.length) {
-    console.warn("⚠️ Нет получателей для отправки заказа");
+    console.warn("Нет получателей Telegram, рассылка пропущена");
     return;
   }
 
-  // Подготовим фото:
   // attachments: [{ path, mime, originalName, size, ... }]
   const photos = [];
   if (attachments.length) {
@@ -128,24 +122,28 @@ const sendOrderToTelegram = async (order, attachmentsOrOpts = [], maybeOpts = {}
         const filename = att.originalName || att.filename || "image.jpg";
         photos.push({ buffer, filename });
       } catch (e) {
-        console.warn("⚠️ Не удалось прочитать файл:", att.path, e.message);
+        console.warn("Не удалось прочитать файл вложения:", att.path, e.message);
       }
     }
   }
 
-  // Рассылка: сначала первому получателю заливаем фото "по-настоящему",
-  // получаем file_id, потом всем остальным шлём уже по file_id
-  let cachedFileIds; // будет инициализирован на первой итерации
+  let cachedFileIds;
 
   for (let idx = 0; idx < recipients.length; idx++) {
     const chatId = recipients[idx];
-    await sendText(chatId, message);
 
-    // если фото нет — просто дальше
+    // 1) Основная информация
+    await sendText(chatId, mainMessage);
+
+    // 2) Комментарий (если есть)
+    if (commentMessage) {
+      await sendText(chatId, commentMessage);
+    }
+
+    // 3) Фото/вложения
     if (!photos.length) continue;
 
     if (idx === 0) {
-      // Первый получатель: загружаем файлы и собираем file_id
       cachedFileIds = [];
       for (let i = 0; i < photos.length; i++) {
         const p = photos[i];
@@ -153,7 +151,6 @@ const sendOrderToTelegram = async (order, attachmentsOrOpts = [], maybeOpts = {}
         if (fileId) cachedFileIds[i] = fileId;
       }
     } else {
-      // Остальным: отправляем уже сохранённые file_id
       for (let i = 0; i < (cachedFileIds?.length || 0); i++) {
         const fileId = cachedFileIds[i];
         if (fileId) await sendPhoto(chatId, fileId);
