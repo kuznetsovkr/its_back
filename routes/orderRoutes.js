@@ -357,10 +357,14 @@ async function sendOrderToCdek({ order, body, totalPrice, deliveryAddress, phone
   console.log("[CDEK] Sending create_order for", payload.number, "to", `${serviceUrl}?action=create_order`);
 
   try {
-    await axios.post(`${serviceUrl}?action=create_order`, payload, {
+    const resp = await axios.post(`${serviceUrl}?action=create_order`, payload, {
       headers: { "Content-Type": "application/json" },
       timeout: 10000,
     });
+    const data = resp?.data || {};
+    const uuid = data?.entity?.uuid || null;
+    const state = data?.requests?.[0]?.state || null;
+    console.log("[CDEK] create_order ok", { uuid, state, url: resp?.config?.url });
   } catch (e) {
     const resp = e.response;
     console.error("[CDEK] create_order error", {
