@@ -29,9 +29,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'OPTIONS') {
 }
 
 $service = new service(
-    getenv('CDEK_ACCOUNT') ?: 'lBYFH953RqTyIub4ZsrMjVBZbcWgoJrE',
-    getenv('CDEK_PASSWORD') ?: '5K4vYnHlnxwEnqO1yOgeY52PG0mTQkjA',
-    getenv('CDEK_BASE_URL') ?: 'https://api.cdek.ru/v2'
+    getenv('CDEK_ACCOUNT'),
+    getenv('CDEK_PASSWORD'),
+    getenv('CDEK_BASE_URL')
 );
 $service->process($_GET, file_get_contents('php://input'));
 
