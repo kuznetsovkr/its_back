@@ -463,7 +463,6 @@ class service
             if (!empty($address['code'])) {
                 $payload['delivery_point'] = $address['code'];
             }
-            $payload['to_location'] = $this->buildToLocationFromAddress($address);
         } else {
             $payload['to_location'] = $this->buildToLocationFromAddress($address);
         }
