@@ -28,8 +28,11 @@ if ($_SERVER['REQUEST_METHOD'] == 'OPTIONS') {
     exit();
 }
 
-$service = new service('lBYFH953RqTyIub4ZsrMjVBZbcWgoJrE',
- '5K4vYnHlnxwEnqO1yOgeY52PG0mTQkjA');
+$service = new service(
+    getenv('CDEK_ACCOUNT') ?: 'lBYFH953RqTyIub4ZsrMjVBZbcWgoJrE',
+    getenv('CDEK_PASSWORD') ?: '5K4vYnHlnxwEnqO1yOgeY52PG0mTQkjA',
+    getenv('CDEK_BASE_URL') ?: 'https://api.cdek.ru/v2'
+);
 $service->process($_GET, file_get_contents('php://input'));
 
 class service
@@ -83,6 +86,10 @@ class service
                     break;
                 case 'calculate':
                     $this->sendResponse($this->calculate(), $time);
+                    break;
+                case 'create_order':
+                case 'register_order':
+                    $this->sendResponse($this->createOrder(), $time);
                     break;
                 default:
                     $this->sendValidationError('Unknown action');
@@ -391,5 +398,215 @@ class service
 
         $this->endMetrics('calc', 'Calculate Request', $time);
         return $result;
+    }
+
+    protected function createOrder()
+    {
+        $time = $this->startMetrics();
+        $payload = $this->buildOrderPayload($this->requestData);
+
+        if (empty($payload['number'])) {
+            $this->sendValidationError('number is required');
+        }
+        if (empty($payload['tariff_code'])) {
+            $this->sendValidationError('tariff_code is required');
+        }
+        if (empty($payload['recipient']['name']) || empty($payload['recipient']['phones'][0]['number'])) {
+            $this->sendValidationError('recipient.name and recipient.phones[0].number are required');
+        }
+        if (empty($payload['to_location']) && empty($payload['delivery_point'])) {
+            $this->sendValidationError('to_location or delivery_point is required');
+        }
+        if (empty($payload['packages']) || !is_array($payload['packages'])) {
+            $this->sendValidationError('packages are required');
+        }
+
+        $result = $this->httpRequest('orders', $payload, false, true);
+        $this->endMetrics('order', 'Order Create Request', $time);
+        return $result;
+    }
+
+    private function buildOrderPayload($data)
+    {
+        // Если прилетел уже готовый payload — используем его как есть
+        if (!empty($data['tariff_code']) && isset($data['recipient']) && (isset($data['to_location']) || isset($data['delivery_point']))) {
+            $payload = $data;
+            unset($payload['action']);
+            if (!isset($payload['type'])) {
+                $payload['type'] = 1;
+            }
+            return $payload;
+        }
+
+        // Иначе собираем из полей виджета
+        $payload = array();
+        $payload['type'] = 1;
+
+        $payload['number'] = $data['number']
+            ?? $data['orderNumber']
+            ?? $data['orderId']
+            ?? $data['id']
+            ?? ('order-' . time());
+
+        $tariff = $data['cdekTariffCode'] ?? null;
+        if (!$tariff && !empty($data['cdekTariff']) && is_array($data['cdekTariff'])) {
+            $tariff = $data['cdekTariff']['tariff_code'] ?? ($data['cdekTariff']['code'] ?? null);
+        }
+        $payload['tariff_code'] = $tariff;
+
+        $payload['from_location'] = $this->buildFromLocation($data['cdekFrom'] ?? array());
+
+        $mode = $data['cdekMode'] ?? 'office';
+        $address = $this->decodeJsonIfNeeded($data['cdekAddress'] ?? array());
+
+        if ($mode === 'office') {
+            if (!empty($address['code'])) {
+                $payload['delivery_point'] = $address['code'];
+            }
+            $payload['to_location'] = $this->buildToLocationFromAddress($address);
+        } else {
+            $payload['to_location'] = $this->buildToLocationFromAddress($address);
+        }
+
+        $recipientFull = $data['recipientFullName'] ?? '';
+        $payload['recipient'] = array(
+            'name' => $this->buildRecipientName($recipientFull, $data),
+            'phones' => array(array('number' => $this->normalizePhone($data['recipientPhoneDigits'] ?? ($data['phone'] ?? '')))),
+        );
+
+        $payload['packages'] = $this->buildPackages($this->decodeJsonIfNeeded($data['cdekGoods'] ?? array()), $data);
+
+        if (!empty($data['cdekAddressLabel'])) {
+            $payload['comment'] = $data['cdekAddressLabel'];
+        } elseif (!empty($data['comment'])) {
+            $payload['comment'] = $data['comment'];
+        }
+
+        // Оплата онлайн на сайте → в СДЭК стоимость доставки ставим 0 для получателя
+        if (!empty($data['deliveryPayment']['payer']) && $data['deliveryPayment']['payer'] === 'sender') {
+            $payload['delivery_recipient_cost'] = array('value' => 0);
+            $payload['recipient_currency'] = 'RUB';
+        }
+
+        unset($payload['action']);
+        return $payload;
+    }
+
+    private function decodeJsonIfNeeded($value)
+    {
+        if (is_array($value)) {
+            return $value;
+        }
+        if (is_string($value)) {
+            $decoded = json_decode($value, true);
+            return $decoded ?: array();
+        }
+        return array();
+    }
+
+    private function buildRecipientName($fullName, $data)
+    {
+        $fullName = trim((string)$fullName);
+        if ($fullName !== '') {
+            return $fullName;
+        }
+
+        $parts = array_filter(array(
+            $data['lastName'] ?? null,
+            $data['firstName'] ?? null,
+            $data['middleName'] ?? null,
+        ));
+        return implode(' ', $parts);
+    }
+
+    private function normalizePhone($phone)
+    {
+        $digits = preg_replace('/\D+/', '', (string)$phone);
+        if ($digits === '') {
+            return '';
+        }
+        if ($digits[0] !== '7' && $digits[0] !== '8') {
+            return '+' . $digits;
+        }
+        if ($digits[0] === '8') {
+            $digits = '7' . substr($digits, 1);
+        }
+        return '+' . $digits;
+    }
+
+    private function buildFromLocation($from)
+    {
+        $from = $this->decodeJsonIfNeeded($from);
+        return array_filter(array(
+            'country_code' => $from['country_code'] ?? null,
+            'code' => $from['city_code'] ?? null,
+            'postal_code' => $from['postal_code'] ?? null,
+            'address' => $from['address'] ?? null,
+        ), static function ($v) {
+            return $v !== null && $v !== '';
+        });
+    }
+
+    private function buildToLocationFromAddress($address)
+    {
+        $address = $this->decodeJsonIfNeeded($address);
+        return array_filter(array(
+            'country_code' => $address['country_code'] ?? null,
+            'code' => $address['city_code'] ?? ($address['location']['city_code'] ?? null),
+            'postal_code' => $address['postal_code'] ?? ($address['location']['postal_code'] ?? null),
+            'address' => $address['formatted'] ?? ($address['address'] ?? null),
+        ), static function ($v) {
+            return $v !== null && $v !== '';
+        });
+    }
+
+    private function buildPackages($goods, $data)
+    {
+        $goods = is_array($goods) ? $goods : array();
+        if (empty($goods)) {
+            return array();
+        }
+
+        $packages = array();
+        $totalPrice = isset($data['totalPrice']) ? (float)$data['totalPrice'] : 0;
+        $count = count($goods);
+        $baseCost = $count > 0 ? floor($totalPrice / $count) : 0;
+        $remainder = $count > 0 ? $totalPrice - ($baseCost * $count) : 0;
+
+        foreach ($goods as $idx => $g) {
+            $weight = isset($g['weight_grams']) ? (int)$g['weight_grams'] : null;
+            if ($weight === null && isset($g['weight'])) {
+                $weight = (int)round(((float)$g['weight']) * 1000); // kg → grams
+            }
+            if ($weight === null || $weight <= 0) {
+                $weight = 100; // минимальный вес 100г, чтобы не завалить валидацию
+            }
+
+            $length = isset($g['length']) ? (int)$g['length'] : null;
+            $width  = isset($g['width']) ? (int)$g['width'] : null;
+            $height = isset($g['height']) ? (int)$g['height'] : null;
+
+            $cost = $baseCost + ($idx === 0 ? $remainder : 0);
+
+            $packages[] = array_filter(array(
+                'number' => 'pkg-' . ($idx + 1),
+                'weight' => $weight,
+                'length' => $length,
+                'width' => $width,
+                'height' => $height,
+                'items' => array(array(
+                    'name' => $g['name'] ?? ('Item ' . ($idx + 1)),
+                    'ware_key' => $g['ware_key'] ?? ('SKU-' . ($idx + 1)),
+                    'cost' => $cost,
+                    'payment' => array('value' => 0),
+                    'weight' => $weight,
+                    'amount' => 1,
+                )),
+            ), static function ($v) {
+                return $v !== null && $v !== '';
+            });
+        }
+
+        return $packages;
     }
 }

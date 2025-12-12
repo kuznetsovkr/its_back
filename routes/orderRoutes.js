@@ -4,6 +4,7 @@ const User = require("../models/User");
 const Order = require("../models/Order");
 const sendOrderToTelegram = require("../telegram");
 const sequelize = require("../db");
+const axios = require("axios");
 const Inventory = require("../models/Inventory");
 const PaymentEvent = require("../models/PaymentEvent");
 const router = express.Router();
@@ -148,6 +149,23 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
     // не роняем оформление — вложения опциональны
     }
 
+    // 7) Отправляем заказ в CDEK (если выбрана доставка СДЭК)
+    const cdekMode = req.body.cdekMode;
+    if (cdekMode) {
+      try {
+        await sendOrderToCdek({
+          order,
+          body: req.body,
+          totalPrice,
+          deliveryAddress,
+          phone,
+          nameParts: { firstName, lastName, middleName },
+        });
+      } catch (e) {
+        console.error("[CREATE] CDEK create_order failed:", e?.response?.data || e.message || e);
+      }
+    }
+
 
     console.log("✅ Заказ успешно сохранён в БД", order.id);
     res.json({ message: "Заказ успешно оформлен", orderId: order.id });
@@ -283,5 +301,75 @@ router.get('/:id', async (req, res) => {
 
 
 
+
+async function sendOrderToCdek({ order, body, totalPrice, deliveryAddress, phone, nameParts }) {
+  const serviceUrl =
+    process.env.CDEK_SERVICE_URL ||
+    (process.env.PUBLIC_APP_URL ? `${process.env.PUBLIC_APP_URL}/service.php` : "http://localhost:5000/service.php");
+
+  if (!serviceUrl) {
+    console.warn("[CDEK] CDEK_SERVICE_URL/PUBLIC_APP_URL not configured, skipping create_order");
+    return;
+  }
+
+  const parseMaybeJson = (val) => {
+    if (!val) return null;
+    if (typeof val === "string") {
+      try {
+        return JSON.parse(val);
+      } catch {
+        return null;
+      }
+    }
+    return val;
+  };
+
+  const cdekTariff = parseMaybeJson(body.cdekTariff) || body.cdekTariff;
+  const cdekAddress = parseMaybeJson(body.cdekAddress) || body.cdekAddress;
+  const cdekGoods = parseMaybeJson(body.cdekGoods) || body.cdekGoods;
+  const cdekFrom = parseMaybeJson(body.cdekFrom) || body.cdekFrom;
+  const deliveryPayment = parseMaybeJson(body.deliveryPayment) || body.deliveryPayment;
+
+  const payload = {
+    action: "create_order", // дублируем в body на случай, если query потеряется
+    number: order.id,
+    cdekMode: body.cdekMode,
+    cdekTariffCode: body.cdekTariffCode,
+    cdekTariff,
+    cdekAddress,
+    cdekAddressLabel: body.cdekAddressLabel,
+    cdekGoods,
+    cdekFrom,
+    recipientFullName:
+      body.recipientFullName ||
+      [nameParts.lastName, nameParts.firstName, nameParts.middleName].filter(Boolean).join(" "),
+    recipientPhoneDigits: body.recipientPhoneDigits || phone,
+    totalPrice,
+    deliveryPayment,
+    deliveryAddress,
+    comment: body.comment,
+  };
+
+  if (!payload.cdekTariffCode && payload.cdekTariff && payload.cdekTariff.tariff_code) {
+    payload.cdekTariffCode = payload.cdekTariff.tariff_code;
+  }
+
+  console.log("[CDEK] Sending create_order for", payload.number, "to", `${serviceUrl}?action=create_order`);
+
+  try {
+    await axios.post(`${serviceUrl}?action=create_order`, payload, {
+      headers: { "Content-Type": "application/json" },
+      timeout: 10000,
+    });
+  } catch (e) {
+    const resp = e.response;
+    console.error("[CDEK] create_order error", {
+      status: resp?.status,
+      data: resp?.data,
+      url: resp?.config?.url,
+    });
+    throw e;
+  }
+}
 
 module.exports = router;
