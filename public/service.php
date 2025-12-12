@@ -28,11 +28,17 @@ if ($_SERVER['REQUEST_METHOD'] == 'OPTIONS') {
     exit();
 }
 
-$service = new service(
-    getenv('CDEK_ACCOUNT'),
-    getenv('CDEK_PASSWORD'),
-    getenv('CDEK_BASE_URL')
-);
+$login = getenv('CDEK_ACCOUNT');
+$secret = getenv('CDEK_PASSWORD');
+$baseUrl = getenv('CDEK_BASE_URL') ?: 'https://api.cdek.ru/v2';
+
+if (empty($login) || empty($secret)) {
+    http_response_code(500);
+    echo json_encode(['error' => 'config', 'message' => 'CDEK_ACCOUNT or CDEK_PASSWORD is not set'], JSON_UNESCAPED_UNICODE);
+    exit();
+}
+
+$service = new service($login, $secret, $baseUrl);
 $service->process($_GET, file_get_contents('php://input'));
 
 class service
