@@ -406,8 +406,10 @@ class service
             || !empty($filters['kladr_code'])
             || !empty($filters['fias_guid']);
 
-        $hasGeoFilter = (!empty($this->requestData['longitude']) && isset($this->requestData['latitude']))
-            || (!empty($filters['longitude']) && isset($filters['latitude']));
+        $latitude  = $this->requestData['latitude']  ?? ($filters['latitude']  ?? null);
+        $longitude = $this->requestData['longitude'] ?? ($filters['longitude'] ?? null);
+
+        $hasGeoFilter = (!empty($longitude) && $latitude !== null);
 
         // Пробрасываем фильтры, если они пришли вложенно (filters[city_code]=278 -> city_code=278)
         foreach (array('city_code', 'city', 'region_code', 'postal_code', 'kladr_code', 'fias_guid', 'longitude', 'latitude') as $k) {
@@ -415,6 +417,21 @@ class service
                 $this->requestData[$k] = $filters[$k];
             }
         }
+
+        // Если есть координаты, но нет города — пробуем определить город по геолокации
+        if ($hasGeoFilter && !$hasCityFilter) {
+            $geoCity = $this->resolveCityByGeo($latitude, $longitude, $this->requestData['country_code']);
+            if (!empty($geoCity['code'])) {
+                $this->requestData['city_code'] = $geoCity['code'];
+                if (!empty($geoCity['postal_codes'][0])) {
+                    $this->requestData['postal_code'] = $geoCity['postal_codes'][0];
+                }
+                $hasCityFilter = true;
+            }
+        }
+
+        // После определения города координаты deliverypoints не нужны
+        unset($this->requestData['latitude'], $this->requestData['longitude'], $filters['latitude'], $filters['longitude']);
 
         if (!$hasCityFilter && !$hasGeoFilter) {
             $defaultCityCode = getenv('CDEK_DEFAULT_CITY_CODE');
@@ -599,6 +616,39 @@ class service
         ), static function ($v) {
             return $v !== null && $v !== '';
         });
+    }
+
+    private function resolveCityByGeo($latitude, $longitude, $countryCode = 'RU')
+    {
+        $lat = (float)$latitude;
+        $lon = (float)$longitude;
+        if (!$lat || !$lon) {
+            return array();
+        }
+
+        try {
+            $resp = $this->httpRequest('location/cities', array(
+                'country_codes' => $countryCode ?: 'RU',
+                'size' => 1,
+                'page' => 0,
+                'latitude' => $lat,
+                'longitude' => $lon,
+            ));
+            $data = json_decode($resp['result'], true);
+            if (isset($data['errors'])) {
+                return array();
+            }
+            $city = $data[0] ?? null;
+            if (!is_array($city)) {
+                return array();
+            }
+            return array(
+                'code' => $city['code'] ?? null,
+                'postal_codes' => $city['postal_codes'] ?? array(),
+            );
+        } catch (Throwable $e) {
+            return array();
+        }
     }
 
     private function buildPackages($goods, $data)
