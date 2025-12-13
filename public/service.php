@@ -382,23 +382,47 @@ class service
         if (empty($this->requestData['lang'])) {
             $this->requestData['lang'] = 'rus';
         }
+        if (!isset($this->requestData['page'])) {
+            $this->requestData['page'] = 0;
+        }
+        if (empty($this->requestData['size'])) {
+            $this->requestData['size'] = 500;
+        }
 
         // Если фронт не передал фильтр по городу, ограничим стартовым городом, чтобы не тянуть все ПВЗ по стране.
+        $filters = $this->requestData['filters'] ?? array();
+        $filters = is_array($filters) ? $filters : array();
+
         $hasCityFilter = !empty($this->requestData['city_code'])
             || !empty($this->requestData['city'])
             || !empty($this->requestData['region_code'])
             || !empty($this->requestData['postal_code'])
             || !empty($this->requestData['kladr_code'])
-            || !empty($this->requestData['fias_guid']);
+            || !empty($this->requestData['fias_guid'])
+            || !empty($filters['city_code'])
+            || !empty($filters['city'])
+            || !empty($filters['region_code'])
+            || !empty($filters['postal_code'])
+            || !empty($filters['kladr_code'])
+            || !empty($filters['fias_guid']);
+
+        // Пробрасываем фильтры, если они пришли вложенно (filters[city_code]=278 -> city_code=278)
+        foreach (array('city_code', 'city', 'region_code', 'postal_code', 'kladr_code', 'fias_guid') as $k) {
+            if (!empty($filters[$k]) && empty($this->requestData[$k])) {
+                $this->requestData[$k] = $filters[$k];
+            }
+        }
 
         if (!$hasCityFilter) {
             $defaultCityCode = getenv('CDEK_DEFAULT_CITY_CODE');
             $defaultCityName = getenv('CDEK_DEFAULT_CITY') ?: 'Красноярск';
-            if (!empty($defaultCityCode)) {
-                $this->requestData['city_code'] = $defaultCityCode;
-            } else {
-                $this->requestData['city'] = $defaultCityName;
+            // жёсткий резерв по умолчанию для Красноярска
+            if (empty($defaultCityCode)) {
+                $defaultCityCode = 278; // Krasnoyarsk city_code в базе СДЭК
             }
+
+            $this->requestData['city_code'] = $defaultCityCode;
+            $this->requestData['city']      = $defaultCityName;
         }
 
         $result = $this->httpRequest('deliverypoints', $this->requestData);
