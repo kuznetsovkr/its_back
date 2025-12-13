@@ -406,17 +406,14 @@ class service
             || !empty($filters['kladr_code'])
             || !empty($filters['fias_guid']);
 
-        $hasGeoFilter = (!empty($this->requestData['longitude']) && isset($this->requestData['latitude']))
-            || (!empty($filters['longitude']) && isset($filters['latitude']));
-
         // Пробрасываем фильтры, если они пришли вложенно (filters[city_code]=278 -> city_code=278)
-        foreach (array('city_code', 'city', 'region_code', 'postal_code', 'kladr_code', 'fias_guid', 'longitude', 'latitude') as $k) {
-            if (isset($filters[$k]) && $filters[$k] !== '' && !isset($this->requestData[$k])) {
+        foreach (array('city_code', 'city', 'region_code', 'postal_code', 'kladr_code', 'fias_guid') as $k) {
+            if (!empty($filters[$k]) && empty($this->requestData[$k])) {
                 $this->requestData[$k] = $filters[$k];
             }
         }
 
-        if (!$hasCityFilter && !$hasGeoFilter) {
+        if (!$hasCityFilter) {
             $defaultCityCode = getenv('CDEK_DEFAULT_CITY_CODE');
             $defaultCityName = getenv('CDEK_DEFAULT_CITY') ?: 'Красноярск';
             // жёсткий резерв по умолчанию для Красноярска
