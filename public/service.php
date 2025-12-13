@@ -371,74 +371,75 @@ class service
     {
         $time = $this->startMetrics();
 
-        // дефолты
-        if (empty($this->requestData['type'])) $this->requestData['type'] = 'PVZ';
-        if (empty($this->requestData['country_code'])) $this->requestData['country_code'] = 'RU';
-        if (empty($this->requestData['lang'])) $this->requestData['lang'] = 'rus';
-        if (!isset($this->requestData['page'])) $this->requestData['page'] = 0;
-        if (empty($this->requestData['size'])) $this->requestData['size'] = 500;
+        // Значения по умолчанию, если виджет не прислал фильтры
+        if (empty($this->requestData['type'])) {
+            $this->requestData['type'] = 'PVZ'; // только пункты выдачи, без постаматов
+        }
+        if (empty($this->requestData['country_code'])) {
+            $this->requestData['country_code'] = 'RU';
+        }
+        // Явно русскую локаль, чтобы не тянуть лишнее
+        if (empty($this->requestData['lang'])) {
+            $this->requestData['lang'] = 'rus';
+        }
+        if (!isset($this->requestData['page'])) {
+            $this->requestData['page'] = 0;
+        }
+        if (empty($this->requestData['size'])) {
+            $this->requestData['size'] = 500;
+        }
 
-        // filters flatten
+        // Если фронт не передал фильтр по городу, ограничим стартовым городом, чтобы не тянуть все ПВЗ по стране.
         $filters = $this->requestData['filters'] ?? array();
         $filters = is_array($filters) ? $filters : array();
 
-        foreach (array('city_code','city','region_code','postal_code','kladr_code','fias_guid','longitude','latitude') as $k) {
+        $hasCityFilter = !empty($this->requestData['city_code'])
+            || !empty($this->requestData['city'])
+            || !empty($this->requestData['region_code'])
+            || !empty($this->requestData['postal_code'])
+            || !empty($this->requestData['kladr_code'])
+            || !empty($this->requestData['fias_guid'])
+            || !empty($filters['city_code'])
+            || !empty($filters['city'])
+            || !empty($filters['region_code'])
+            || !empty($filters['postal_code'])
+            || !empty($filters['kladr_code'])
+            || !empty($filters['fias_guid']);
+
+        $latitude  = $this->requestData['latitude']  ?? ($filters['latitude']  ?? null);
+        $longitude = $this->requestData['longitude'] ?? ($filters['longitude'] ?? null);
+
+        $hasGeoFilter = (!empty($longitude) && $latitude !== null);
+
+        // Пробрасываем фильтры, если они пришли вложенно (filters[city_code]=278 -> city_code=278)
+        foreach (array('city_code', 'city', 'region_code', 'postal_code', 'kladr_code', 'fias_guid', 'longitude', 'latitude') as $k) {
             if (isset($filters[$k]) && $filters[$k] !== '' && !isset($this->requestData[$k])) {
                 $this->requestData[$k] = $filters[$k];
             }
         }
 
-        // определяем: есть ли уже нормальный городской фильтр
-        $hasCityFilter =
-            $this->hasValue('city_code') ||
-            $this->hasValue('postal_code') ||
-            $this->hasValue('fias_guid') ||
-            $this->hasValue('kladr_code') ||
-            $this->hasValue('city') ||
-            $this->hasValue('region_code');
-
-        // если city-фильтра нет, но есть координаты — пытаемся превратить lat/lon в city_code / postal_code
-        if (!$hasCityFilter && $this->hasValue('longitude') && $this->hasValue('latitude')) {
-            $geoStart = $this->startMetrics();
-
-            $lon = $this->toFloat($this->requestData['longitude']);
-            $lat = $this->toFloat($this->requestData['latitude']);
-
-            $geo = $this->reverseGeocodeYandex($lon, $lat); // ['postal_code' => '...', 'city' => '...']
-
-            $this->endMetrics('geo', 'Reverse geocode (lat/lon -> address)', $geoStart);
-
-            if (!empty($geo['postal_code']) || !empty($geo['city'])) {
-                // подставим postal_code/city (полезно даже если city_code не нашли)
-                if (!empty($geo['postal_code']) && !$this->hasValue('postal_code')) {
-                    $this->requestData['postal_code'] = $geo['postal_code'];
+        // Если есть координаты, но нет города — пробуем определить город по геолокации
+        if ($hasGeoFilter && !$hasCityFilter) {
+            $geoCity = $this->resolveCityByGeo($latitude, $longitude, $this->requestData['country_code']);
+            if (!empty($geoCity['code'])) {
+                $this->requestData['city_code'] = $geoCity['code'];
+                if (!empty($geoCity['postal_codes'][0])) {
+                    $this->requestData['postal_code'] = $geoCity['postal_codes'][0];
                 }
-                if (!empty($geo['city']) && !$this->hasValue('city')) {
-                    $this->requestData['city'] = $geo['city'];
-                }
-
-                $cityStart = $this->startMetrics();
-                $cityCode = $this->resolveCdekCityCode(
-                    $geo['postal_code'] ?? null,
-                    $geo['city'] ?? null
-                );
-                $this->endMetrics('city', 'Resolve city_code via CDEK location/cities', $cityStart);
-
-                if (!empty($cityCode)) {
-                    $this->requestData['city_code'] = $cityCode;
-                    $hasCityFilter = true;
-                }
+                $hasCityFilter = true;
             }
-
-            // ВАЖНО: deliverypoints не умеет фильтровать по координатам — убираем, чтобы не мешали
-            unset($this->requestData['longitude'], $this->requestData['latitude']);
         }
 
-        // если вообще ничего не помогло — падение в дефолтный город (Красноярск)
-        if (!$hasCityFilter) {
-            $defaultCityCode = 278;
+        // После определения города координаты deliverypoints не нужны
+        unset($this->requestData['latitude'], $this->requestData['longitude'], $filters['latitude'], $filters['longitude']);
+
+        if (!$hasCityFilter && !$hasGeoFilter) {
+            $defaultCityCode = getenv('CDEK_DEFAULT_CITY_CODE');
             $defaultCityName = getenv('CDEK_DEFAULT_CITY') ?: 'Красноярск';
-            if (empty($defaultCityCode)) $defaultCityCode = 278;
+            // жёсткий резерв по умолчанию для Красноярска
+            if (empty($defaultCityCode)) {
+                $defaultCityCode = 278; // Krasnoyarsk city_code в базе СДЭК
+            }
 
             $this->requestData['city_code'] = $defaultCityCode;
             $this->requestData['city']      = $defaultCityName;
@@ -483,188 +484,6 @@ class service
         $this->endMetrics('order', 'Order Create Request', $time);
         return $result;
     }
-    
-    private function hasValue($key): bool
-    {
-        return isset($this->requestData[$key]) && $this->requestData[$key] !== '' && $this->requestData[$key] !== null;
-    }
-
-    private function toFloat($v): float
-    {
-        if (is_string($v)) $v = str_replace(',', '.', $v);
-        return (float)$v;
-    }
-
-    /**
-     * Reverse geocode через Yandex Geocoder:
-     * lat/lon -> ['postal_code' => '660000', 'city' => 'Красноярск']
-     */
-    private function reverseGeocodeYandex(float $lon, float $lat): array
-    {
-        $key = getenv('310f9193-b426-4cdd-8e65-b03ac33526fa');
-        if (!$key) return array();
-
-        // лёгкий кеш (если включён APCu)
-        $cacheKey = 'yx_geo_' . md5(round($lon, 3) . ',' . round($lat, 3));
-        if (function_exists('apcu_fetch')) {
-            $cached = apcu_fetch($cacheKey);
-            if (is_array($cached)) return $cached;
-        }
-
-        // kind=house обычно лучше отдаёт postal_code, чем locality
-        $url = 'https://geocode-maps.yandex.ru/v1/?' . http_build_query(array(
-            'apikey' => $key,
-            'geocode' => $lon . ',' . $lat,
-            'format' => 'json',
-            'lang' => 'ru_RU',
-            'results' => 1,
-            'kind' => 'house',
-        ));
-
-        $data = $this->httpGetJson($url, 2, 4);
-        $parsed = $this->parseYandexGeocoderResponse($data);
-
-        // если вдруг не нашли город — пробуем locality
-        if (empty($parsed['city'])) {
-            $url2 = 'https://geocode-maps.yandex.ru/v1/?' . http_build_query(array(
-                'apikey' => $key,
-                'geocode' => $lon . ',' . $lat,
-                'format' => 'json',
-                'lang' => 'ru_RU',
-                'results' => 1,
-                'kind' => 'locality',
-            ));
-            $data2 = $this->httpGetJson($url2, 2, 4);
-            $parsed2 = $this->parseYandexGeocoderResponse($data2);
-            $parsed = array_merge($parsed, array_filter($parsed2));
-        }
-
-        if (function_exists('apcu_store')) {
-            apcu_store($cacheKey, $parsed, 86400);
-        }
-
-        return $parsed;
-    }
-
-    private function parseYandexGeocoderResponse($data): array
-    {
-        if (!is_array($data)) return array();
-
-        $fm = $data['response']['GeoObjectCollection']['featureMember'][0]['GeoObject'] ?? null;
-        if (!$fm) return array();
-
-        $addr = $fm['metaDataProperty']['GeocoderMetaData']['Address'] ?? array();
-        $components = $addr['Components'] ?? array();
-
-        $postal = $addr['postal_code'] ?? null;
-        if (is_string($postal)) {
-            $postal = preg_replace('/\D+/', '', $postal);
-        }
-
-        $city = null;
-        foreach ($components as $c) {
-            $kind = $c['kind'] ?? '';
-            if ($kind === 'locality') {
-                $city = $c['name'] ?? null;
-                break;
-            }
-        }
-        // иногда вместо locality приходит province/area — подстрахуемся
-        if (!$city) {
-            foreach ($components as $c) {
-                $kind = $c['kind'] ?? '';
-                if (in_array($kind, array('province', 'area', 'district'), true)) {
-                    $city = $c['name'] ?? null;
-                    break;
-                }
-            }
-        }
-
-        $out = array();
-        if (!empty($postal)) $out['postal_code'] = $postal;
-        if (!empty($city)) $out['city'] = $city;
-        return $out;
-    }
-
-    private function httpGetJson(string $url, int $connectTimeoutSec = 2, int $timeoutSec = 4)
-    {
-        $ch = curl_init($url);
-        curl_setopt_array($ch, array(
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HEADER         => false,
-            CURLOPT_CONNECTTIMEOUT => $connectTimeoutSec,
-            CURLOPT_TIMEOUT        => $timeoutSec,
-            CURLOPT_ENCODING       => '',
-        ));
-        $resp = curl_exec($ch);
-        $errno = curl_errno($ch);
-        $err = curl_error($ch);
-        $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        if ($resp === false || $errno) {
-            return null;
-        }
-        if ($status < 200 || $status >= 300) {
-            return null;
-        }
-        $decoded = json_decode($resp, true);
-        return is_array($decoded) ? $decoded : null;
-    }
-
-    /**
-     * CDEK location/cities -> city_code
-     * Параметры там как минимум: country_codes, postal_code, city, size, page, lang. :contentReference[oaicite:2]{index=2}
-     */
-    private function resolveCdekCityCode(?string $postalCode, ?string $city): ?int
-    {
-        $postalCode = $postalCode ? preg_replace('/\D+/', '', $postalCode) : null;
-        $city = $city ? trim($city) : null;
-
-        if (!$postalCode && !$city) return null;
-
-        $cacheKey = 'cdek_city_' . md5(($postalCode ?: '') . '|' . ($city ?: ''));
-        if (function_exists('apcu_fetch')) {
-            $cached = apcu_fetch($cacheKey);
-            if (is_int($cached)) return $cached;
-        }
-
-        $params = array(
-            'country_codes' => 'RU',
-            'lang' => 'rus',
-            'size' => 5,
-            'page' => 0,
-        );
-        if ($postalCode) $params['postal_code'] = $postalCode;
-        if ($city) $params['city'] = $city;
-
-        $resp = $this->httpRequest('location/cities', $params);
-        $arr = json_decode($resp['result'] ?? 'null', true);
-
-        if (!is_array($arr) || empty($arr)) return null;
-
-        // выбираем самый “точный”: сперва по postal_code (если есть в массиве postal_codes), иначе первый
-        $best = $arr[0];
-
-        if ($postalCode) {
-            foreach ($arr as $c) {
-                $pcs = $c['postal_codes'] ?? array();
-                if (is_array($pcs) && in_array($postalCode, $pcs, true) && !empty($c['code'])) {
-                    $best = $c;
-                    break;
-                }
-            }
-        }
-
-        $code = isset($best['code']) ? (int)$best['code'] : null;
-
-        if ($code && function_exists('apcu_store')) {
-            apcu_store($cacheKey, $code, 86400);
-        }
-
-        return $code ?: null;
-    }
-
 
     private function buildOrderPayload($data)
     {
@@ -799,6 +618,38 @@ class service
         });
     }
 
+    private function resolveCityByGeo($latitude, $longitude, $countryCode = 'RU')
+    {
+        $lat = (float)$latitude;
+        $lon = (float)$longitude;
+        if (!$lat || !$lon) {
+            return array();
+        }
+
+        try {
+            $resp = $this->httpRequest('location/cities', array(
+                'country_codes' => $countryCode ?: 'RU',
+                'size' => 1,
+                'page' => 0,
+                'latitude' => $lat,
+                'longitude' => $lon,
+            ));
+            $data = json_decode($resp['result'], true);
+            if (isset($data['errors'])) {
+                return array();
+            }
+            $city = $data[0] ?? null;
+            if (!is_array($city)) {
+                return array();
+            }
+            return array(
+                'code' => $city['code'] ?? null,
+                'postal_codes' => $city['postal_codes'] ?? array(),
+            );
+        } catch (Throwable $e) {
+            return array();
+        }
+    }
 
     private function buildPackages($goods, $data)
     {
