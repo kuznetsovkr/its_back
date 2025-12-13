@@ -83,7 +83,10 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
     };
     const customOption     = parseJson(customOptionRaw) || {};
     const comment          = safe(body.comment);
-    const deliveryAddress  = safe(body.deliveryAddress);
+    const deliveryAddressRaw = safe(body.deliveryAddress);
+    const cdekMode         = safe(body.cdekMode);
+    const parsedCdekAddr   = parseJson(body.cdekAddress) || {};
+    const cdekPvzCode      = safe(parsedCdekAddr.code || body.cdekPvzCode || body.cdekCode || parsedCdekAddr.office_code);
 
     const rawTotalPrice    = body.totalPrice;
     const parsedTotalPrice = Number(rawTotalPrice);
@@ -93,6 +96,12 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
       (embroideryType || "").trim().toLowerCase()
     );
     const isManualFlow = isCustomEmbroidery || !hasNumericPrice;
+
+    // Оформление адреса с пометкой СДЭК + режим
+    const modeLabel = cdekMode === "door" ? "до двери" : cdekMode === "office" ? "до ПВЗ" : "";
+    const deliveryAddressForStore = cdekMode
+      ? ["СДЭК", cdekPvzCode, deliveryAddressRaw, modeLabel].filter(Boolean).join(", ")
+      : deliveryAddressRaw;
 
     // Читаем уточнение по кастомной вышивке
     if (isCustomEmbroidery && !embroideryTypeRu) {
@@ -150,7 +159,7 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
       paymentStatus: isManualFlow ? "manual" : "pending",
       paymentProvider: isManualFlow ? "manual" : null,
       totalPrice,
-      deliveryAddress,
+      deliveryAddress: deliveryAddressForStore,
       inventoryId: inv.id,
     });
 
@@ -185,15 +194,13 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
     // не роняем оформление — вложения опциональны
     }
 
-    // 7) Отправляем заказ в CDEK (если выбрана доставка СДЭК)
-    const cdekMode = req.body.cdekMode;
     if (cdekMode) {
       try {
         await sendOrderToCdek({
           order,
           body: req.body,
           totalPrice: totalPrice ?? 0,
-          deliveryAddress,
+          deliveryAddress: deliveryAddressRaw,
           phone,
           nameParts: { firstName, lastName, middleName },
         });
