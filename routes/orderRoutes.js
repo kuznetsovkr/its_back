@@ -194,9 +194,10 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
     // не роняем оформление — вложения опциональны
     }
 
+    let cdekResult = null;
     if (cdekMode) {
       try {
-        await sendOrderToCdek({
+        cdekResult = await sendOrderToCdek({
           order,
           body: req.body,
           totalPrice: totalPrice ?? 0,
@@ -211,7 +212,11 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
 
 
     console.log("✅ Заказ успешно сохранён в БД", order.id);
-    res.json({ message: "Заказ успешно оформлен", orderId: order.id });
+    res.json({
+      message: "Заказ успешно оформлен",
+      orderId: order.id,
+      cdekNumber: cdekResult?.cdekNumber || null,
+    });
   } catch (error) {
     console.error("❌ Ошибка оформления заказа:", error);
     res.status(500).json({ message: "Ошибка оформления заказа", error: error.message });
@@ -416,9 +421,13 @@ async function sendOrderToCdek({ order, body, totalPrice, deliveryAddress, phone
       timeout: 10000,
     });
     const data = resp?.data || {};
-    const uuid = data?.entity?.uuid || null;
-    const state = data?.requests?.[0]?.state || null;
-    console.log("[CDEK] create_order ok", { uuid, state, url: resp?.config?.url });
+    const entity = data?.entity || {};
+    const requests = data?.requests || [];
+    const uuid = entity?.uuid || null;
+    const cdekNumber = entity?.cdek_number || entity?.cdekNumber || null;
+    const state = requests?.[0]?.state || null;
+    console.log("[CDEK] create_order ok", { uuid, cdekNumber, state, url: resp?.config?.url });
+    return { cdekNumber, data };
   } catch (e) {
     const resp = e.response;
     console.error("[CDEK] create_order error", {
