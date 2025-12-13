@@ -19,6 +19,9 @@ router.post('/link', async (req, res) => {
     const order = await Order.findByPk(orderId);
     if (!order) return res.status(404).json({ message: 'Order not found' });
     if (order.paymentStatus === 'paid') return res.status(409).json({ message: 'Order already paid' });
+    if (order.paymentProvider === 'manual' || order.paymentStatus === 'manual') {
+      return res.status(409).json({ message: 'Оплата для этого заказа не требуется' });
+    }
 
     const pay_amount = fmt2(1);
     const clientid = [order.lastName, order.firstName, order.middleName].filter(Boolean).join(' ') || 'Покупатель';

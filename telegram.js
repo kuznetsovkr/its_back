@@ -89,6 +89,17 @@ const formatPhone = (phone) => {
   return digits.startsWith("7") ? `+${digits}` : `+7${digits}`;
 };
 
+const PRICE_PENDING_TEXT = "стоимость рассчитает менеджер";
+
+const priceLabel = (order) => {
+  const isManualPrice =
+    order.paymentProvider === "manual" ||
+    order.paymentStatus === "manual" ||
+    order.totalPrice == null;
+  if (isManualPrice) return PRICE_PENDING_TEXT;
+  return `${order.totalPrice ?? 0} ₽`;
+};
+
 const formatPaidAt = (ts) => {
   if (!ts) return "";
   try {
@@ -130,6 +141,7 @@ const sendOrderToTelegram = async (order, attachmentsOrOpts = [], maybeOpts = {}
   // если задан Патронус, мордашки не показываем
   if (!hasPatronus && hasPetFace) counts.push(`мордашек: ${order.petFaceCount}`);
   const countsStr = counts.length ? ` (${md(counts.join(", "))})` : "";
+  const priceText = priceLabel(order);
 
   const mainMessage =
     `🧾 *Заказ #${order.id} — новый*\n` +
@@ -141,7 +153,7 @@ const sendOrderToTelegram = async (order, attachmentsOrOpts = [], maybeOpts = {}
       : ""
     ) +
     `📍 ${md(order.deliveryAddress || "-")}\n` +
-    `💰 ${order.totalPrice ?? 0} ₽\n` +
+    `💰 ${md(priceText)}\n` +
     (order.paidAt ? `✅ Оплачен: ${md(formatPaidAt(order.paidAt))}\n` : "");
 
   const commentMessage = comment ? `💬 Комментарий:\n${md(comment)}` : null;

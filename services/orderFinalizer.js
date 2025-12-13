@@ -13,7 +13,7 @@ async function finalizePaidOrder({ orderId, provider = "manual", eventId, overri
   const t = await sequelize.transaction();
   try {
     // 1) Идемпотентность
-    await PaymentEvent.findOrCreate({
+    const [, created] = await PaymentEvent.findOrCreate({
       where: { eventId },
       defaults: { provider, orderId, payload: overrides || {} },
       transaction: t,
@@ -26,17 +26,27 @@ async function finalizePaidOrder({ orderId, provider = "manual", eventId, overri
       return { ok: false, message: "Заказ не найден" };
     }
 
-    // ✅ Если уже финализирован — просто выходим, НИЧЕГО не шлём повторно
-    if (order.status === "Оплачено") {
+    const isManualFlow =
+      provider === "manual" ||
+      order.paymentProvider === "manual" ||
+      order.paymentStatus === "manual";
+
+    // Если уже финализирован - просто выходим, НИЧЕГО не шлём повторно
+    if (!created || order.status === "Оплачено") {
       await t.commit();
       return { ok: true, alreadyProcessed: true, order };
     }
 
-    // Без подтверждённой оплаты финализацию не проводим
-    if (order.paymentStatus !== "paid") {
+    // Без подтверждённой оплаты финализацию не проводим (кроме ручных сценариев)
+    if (!isManualFlow && order.paymentStatus !== "paid") {
       await t.rollback();
       return { ok: false, message: "Оплата ещё не подтверждена" };
     }
+
+    const overridePrice = overrides.totalPrice;
+    const parsedOverridePrice =
+      overridePrice !== undefined ? Number(overridePrice) : undefined;
+    const hasNumericOverridePrice = Number.isFinite(parsedOverridePrice);
 
     // 3) Списываем со склада
     let item;
@@ -59,10 +69,18 @@ async function finalizePaidOrder({ orderId, provider = "manual", eventId, overri
     await item.save({ transaction: t });
 
     // 4) Обновляем заказ
-    order.status = "Оплачено";
-    order.paidAt = order.paidAt || new Date();
-    if (overrides.totalPrice) order.totalPrice = overrides.totalPrice;
-    if (overrides.deliveryAddress) order.deliveryAddress = overrides.deliveryAddress;
+    if (isManualFlow) {
+      order.status = "Ожидает расчёта";
+      order.paymentStatus = order.paymentStatus === "paid" ? "paid" : "manual";
+      order.paymentProvider = order.paymentProvider || provider;
+      if (hasNumericOverridePrice) order.totalPrice = parsedOverridePrice;
+      if (overrides.deliveryAddress) order.deliveryAddress = overrides.deliveryAddress;
+    } else {
+      order.status = "Оплачено";
+      order.paidAt = order.paidAt || new Date();
+      if (hasNumericOverridePrice) order.totalPrice = parsedOverridePrice;
+      if (overrides.deliveryAddress) order.deliveryAddress = overrides.deliveryAddress;
+    }
     await order.save({ transaction: t });
 
     // Коммитим транзакцию
@@ -78,7 +96,7 @@ async function finalizePaidOrder({ orderId, provider = "manual", eventId, overri
     // 6) Пост-коммит: ОДНА отправка в Телеграм с вложениями
     try {
       const files = await OrderAttachment.findAll({ where: { orderId }, raw: true });
-      await sendOrderToTelegram(order.toJSON(), files); // ⬅️ передаём массив вложений
+      await sendOrderToTelegram(order.toJSON(), files);
     } catch (e) {
       console.error("Telegram send error:", e);
     }
@@ -86,7 +104,7 @@ async function finalizePaidOrder({ orderId, provider = "manual", eventId, overri
     return { ok: true, order };
   } catch (e) {
     await t.rollback();
-    console.error("❌ finalizePaidOrder error:", e);
+    console.error("❗ finalizePaidOrder error:", e);
     throw e;
   }
 }

@@ -70,7 +70,15 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
     const customText       = safe(body.customText);
     const comment          = safe(body.comment);
     const deliveryAddress  = safe(body.deliveryAddress);
-    const totalPrice       = Number(body.totalPrice) || 0;
+
+    const rawTotalPrice    = body.totalPrice;
+    const parsedTotalPrice = Number(rawTotalPrice);
+    const hasNumericPrice  = Number.isFinite(parsedTotalPrice);
+    const totalPrice       = hasNumericPrice ? parsedTotalPrice : null;
+    const isCustomEmbroidery = ["custom", "other", "другая", "другое"].includes(
+      (embroideryType || "").trim().toLowerCase()
+    );
+    const isManualFlow = isCustomEmbroidery || !hasNumericPrice;
 
     // 4) Мини-валидация, чтобы не ловить notNull на модели
     if (!firstName || !lastName) {
@@ -111,8 +119,9 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
       customText,
       comment,
       orderDate: new Date(),
-      status: "Ожидание оплаты",
-      paymentStatus: "pending",
+      status: isManualFlow ? "Ожидает расчёта" : "Ожидание оплаты",
+      paymentStatus: isManualFlow ? "manual" : "pending",
+      paymentProvider: isManualFlow ? "manual" : null,
       totalPrice,
       deliveryAddress,
       inventoryId: inv.id,
@@ -156,7 +165,7 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
         await sendOrderToCdek({
           order,
           body: req.body,
-          totalPrice,
+          totalPrice: totalPrice ?? 0,
           deliveryAddress,
           phone,
           nameParts: { firstName, lastName, middleName },
@@ -179,7 +188,16 @@ router.put("/update-status/:orderId", async (req, res) => {
         const { orderId } = req.params;
         const { status } = req.body;
 
-        const validStatuses = ["Ожидание оплаты", "Оплачено", "Принят", "Дизайн", "Вышивка", "Отправлен", "Отменен"];
+        const validStatuses = [
+            "Ожидает расчёта",
+            "Ожидание оплаты",
+            "Оплачено",
+            "Принят",
+            "Дизайн",
+            "Вышивка",
+            "Отправлен",
+            "Отменен"
+        ];
         if (!validStatuses.includes(status)) {
             return res.status(400).json({ message: "Некорректный статус" });
         }
@@ -291,9 +309,11 @@ router.get('/:id', async (req, res) => {
   res.json({
     id: order.id,
     paymentStatus: order.paymentStatus || null, // 'pending' | 'paid' | 'failed'
+    paymentProvider: order.paymentProvider || null,
     status: order.status,                        // бизнес-статус
     paidAt: order.paidAt,
     totalPrice: order.totalPrice,
+    pricePending: order.paymentStatus === "manual" || order.paymentProvider === "manual" || order.totalPrice == null,
     paykeeperInvoiceId: order.paykeeperInvoiceId,
     paykeeperPaymentId: order.paykeeperPaymentId,
   });
