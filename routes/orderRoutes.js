@@ -64,10 +64,24 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
     const color            = safe(body.color);
     const size             = safe(body.size);
     const embroideryType   = safe(body.embroideryType);
-    const embroideryTypeRu = safe(body.embroideryTypeRu);
+    let embroideryTypeRu   = safe(body.embroideryTypeRu);
     const patronusCount    = toNumberOrNull(body.patronusCount);
     const petFaceCount     = toNumberOrNull(body.petFaceCount);
     const customText       = safe(body.customText);
+    const customOptionRaw  = body.customOption;
+    const parseJson = (val) => {
+      if (!val) return null;
+      if (typeof val === "string") {
+        try {
+          return JSON.parse(val);
+        } catch (_) {
+          return null;
+        }
+      }
+      if (typeof val === "object") return val;
+      return null;
+    };
+    const customOption     = parseJson(customOptionRaw) || {};
     const comment          = safe(body.comment);
     const deliveryAddress  = safe(body.deliveryAddress);
 
@@ -79,6 +93,19 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
       (embroideryType || "").trim().toLowerCase()
     );
     const isManualFlow = isCustomEmbroidery || !hasNumericPrice;
+
+    // Читаем уточнение по кастомной вышивке
+    if (isCustomEmbroidery && !embroideryTypeRu) {
+      const isCustomText  = !!customOption.text;
+      const isCustomImage = !!customOption.image;
+      if (isCustomText && !isCustomImage) {
+        embroideryTypeRu = "Своя вышивка — надпись";
+      } else if (isCustomImage && !isCustomText) {
+        embroideryTypeRu = "Своя вышивка — изображение";
+      } else {
+        embroideryTypeRu = "Своя вышивка";
+      }
+    }
 
     // 4) Мини-валидация, чтобы не ловить notNull на модели
     if (!firstName || !lastName) {
