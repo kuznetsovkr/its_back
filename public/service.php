@@ -383,24 +383,6 @@ class service
             $this->requestData['lang'] = 'rus';
         }
 
-        // Если фронт не передал фильтр по городу, ограничим стартовым городом, чтобы не тянуть все ПВЗ по стране.
-        $hasCityFilter = !empty($this->requestData['city_code'])
-            || !empty($this->requestData['city'])
-            || !empty($this->requestData['region_code'])
-            || !empty($this->requestData['postal_code'])
-            || !empty($this->requestData['kladr_code'])
-            || !empty($this->requestData['fias_guid']);
-
-        if (!$hasCityFilter) {
-            $defaultCityCode = getenv('CDEK_DEFAULT_CITY_CODE');
-            $defaultCityName = getenv('CDEK_DEFAULT_CITY') ?: 'Красноярск';
-            if (!empty($defaultCityCode)) {
-                $this->requestData['city_code'] = $defaultCityCode;
-            } else {
-                $this->requestData['city'] = $defaultCityName;
-            }
-        }
-
         $result = $this->httpRequest('deliverypoints', $this->requestData);
         $this->endMetrics('office', 'Offices Request', $time);
         return $result;
