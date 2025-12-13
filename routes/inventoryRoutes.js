@@ -1,6 +1,7 @@
 const express = require("express");
 const Inventory = require("../models/Inventory");
 const ClothingType = require("../models/ClothingType");
+const requireAdmin = require("../middleware/requireAdmin");
 
 const router = express.Router();
 
@@ -28,7 +29,7 @@ router.get("/", async (_req, res) => {
 });
 
 // Добавить позицию
-router.post("/", async (req, res) => {
+router.post("/", requireAdmin, async (req, res) => {
     try {
         const { productType, color, colorCode, size, quantity, imageUrl, clothingTypeId } = req.body;
 
@@ -54,7 +55,7 @@ router.post("/", async (req, res) => {
 });
 
 // Обновить позицию
-router.put("/:id", async (req, res) => {
+router.put("/:id", requireAdmin, async (req, res) => {
     try {
         const { productType, color, colorCode, quantity, size, imageUrl, clothingTypeId } = req.body;
         const item = await Inventory.findByPk(req.params.id);
@@ -84,7 +85,7 @@ router.put("/:id", async (req, res) => {
 });
 
 // Удалить позицию
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", requireAdmin, async (req, res) => {
     try {
         const item = await Inventory.findByPk(req.params.id);
         if (!item) return res.status(404).json({ message: "Позиция не найдена" });

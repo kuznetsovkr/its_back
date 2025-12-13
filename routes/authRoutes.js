@@ -4,100 +4,95 @@ const User = require("../models/User");
 require("dotenv").config();
 
 const router = express.Router();
-const smsCodes = new Map(); // Временное хранилище кодов
+const smsCodes = new Map(); // phone -> code
 
 const ADMIN_PHONE = process.env.ADMIN_PHONE;
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD; 
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 
-const normalizePhone = (phone) => {
-    if (!phone) {
-        console.error("🚨 Ошибка: normalizePhone получил undefined!");
-        return "";
-    }
-    return phone.replace(/\D/g, "");
-};
+const normalizePhone = (phone) => (phone ? phone.replace(/\D/g, "") : "");
 
-// Генерация кода и вывод в консоль (НО проверяем, если это не админ!)
+const signUserToken = (payload) =>
+    jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: "24h" });
+
 router.post("/request-sms", async (req, res) => {
-    console.log("📩 Получен запрос на /request-sms, тело запроса:", req.body);
+    console.log("[AUTH] request-sms payload:", req.body);
 
     if (!req.body || !req.body.phone) {
-        console.error("🚨 Ошибка: Номер телефона отсутствует в `req.body`!");
-        return res.status(400).json({ message: "Введите номер телефона" });
+        return res.status(400).json({ message: "Неверный запрос: нужен phone" });
     }
 
     const phone = req.body.phone;
     const normalizedPhone = normalizePhone(phone);
-    console.log(`📞 Нормализованный номер: ${normalizedPhone}`);
-
     const normalizedAdminPhone = normalizePhone(ADMIN_PHONE || "");
 
     if (normalizedPhone === normalizedAdminPhone) {
-        return res.json({ message: "Введите пароль" });
+        return res.json({ message: "Для администратора используйте вход по паролю" });
     }
 
     const smsCode = Math.floor(1000 + Math.random() * 9000);
     smsCodes.set(normalizedPhone, smsCode);
-    console.log(`📞 СМС-код для ${normalizedPhone}: ${smsCode}`);
+    console.log(`[AUTH] generated sms code for ${normalizedPhone}: ${smsCode}`);
 
-    return res.json({ message: "Код сгенерирован (dev)", debugCode: smsCode });
+    return res.json({ message: "Код отправлен (dev)", debugCode: smsCode });
 });
 
-//  Авторизация по SMS-коду
 router.post("/login", async (req, res) => {
     try {
-        const { phone, smsCode } = req.body;
-        if (!phone || !smsCode) return res.status(400).json({ message: "Введите номер и код" });
+        const { phone, smsCode } = req.body || {};
+        if (!phone || !smsCode) {
+            return res.status(400).json({ message: "Нужны phone и smsCode" });
+        }
 
-        const normalizedPhone = normalizePhone(phone); // Приводим номер к стандартному виду
-        console.log(`📞 Проверяем вход по SMS. Введённый номер: ${normalizedPhone}`);
+        const normalizedPhone = normalizePhone(phone);
+        console.log(`[AUTH] login attempt for ${normalizedPhone}`);
 
         const validCode = smsCodes.get(normalizedPhone);
-        console.log(`🔍 Найденный код в smsCodes: ${validCode}`);
-
         if (!validCode || validCode != smsCode) {
             return res.status(400).json({ message: "Неверный код" });
         }
-
-        smsCodes.delete(normalizedPhone); // Удаляем использованный код
-
-        //  Логируем перед запросом в базу
-        console.log(`🔍 Проверяем пользователя с номером: ${normalizedPhone}`);
+        smsCodes.delete(normalizedPhone);
 
         let user = await User.findOne({ where: { phone: normalizedPhone } });
-
         if (!user) {
-            console.log("👤 Пользователь не найден, создаём нового...");
-            user = await User.create({ phone: normalizedPhone });
+            console.log("[AUTH] user not found, creating...");
+            user = await User.create({ phone: normalizedPhone, role: "user" });
+        } else if (!user.role) {
+            user.role = "user";
+            await user.save();
         }
 
-        console.log(" Найден / создан пользователь:", user);
-
-        // Генерируем JWT-токен
-        const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: "24h" });
+        const token = signUserToken({ id: user.id, role: user.role, phone: user.phone });
 
         return res.json({ token, user });
     } catch (error) {
-        console.error("❌ Ошибка при авторизации:", error);
-        return res.status(500).json({ message: "Ошибка сервера при авторизации" });
+        console.error("[AUTH] login error:", error);
+        return res.status(500).json({ message: "Ошибка авторизации" });
     }
 });
 
-
 router.post("/admin-login", async (req, res) => {
-    const { phone, password } = req.body;
+    const { phone, password } = req.body || {};
+    const normalizedPhone = normalizePhone(phone);
 
-    if (normalizePhone(phone) !== normalizePhone(ADMIN_PHONE)) {
-        return res.status(403).json({ message: "Нет доступа" });
+    if (normalizedPhone !== normalizePhone(ADMIN_PHONE)) {
+        return res.status(403).json({ message: "Доступ запрещён" });
     }
 
     if (password !== ADMIN_PASSWORD) {
         return res.status(401).json({ message: "Неверный пароль" });
     }
 
-    const token = jwt.sign({ phone, role: "admin" }, process.env.JWT_SECRET, { expiresIn: "24h" });
+    let adminUser = await User.findOne({ where: { phone: normalizedPhone } });
+    if (!adminUser) {
+        adminUser = await User.create({ phone: normalizedPhone, role: "admin" });
+    } else if (adminUser.role !== "admin") {
+        adminUser.role = "admin";
+        await adminUser.save();
+    }
 
-    res.json({ token });
+    const token = signUserToken({ id: adminUser.id, role: adminUser.role, phone: adminUser.phone });
+
+    res.json({ token, user: adminUser });
 });
 
 module.exports = router;

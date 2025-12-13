@@ -23,6 +23,7 @@ router.get("/me", async (req, res) => {
             lastName: user.lastName || "",
             middleName: user.middleName || "",
             birthDate: user.birthDate || "",
+            role: user.role || "user",
         });
     } catch (error) {
         console.error("❌ Ошибка при получении профиля:", error);

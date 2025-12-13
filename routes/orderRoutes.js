@@ -7,6 +7,7 @@ const sequelize = require("../db");
 const axios = require("axios");
 const Inventory = require("../models/Inventory");
 const PaymentEvent = require("../models/PaymentEvent");
+const requireAdmin = require("../middleware/requireAdmin");
 const router = express.Router();
 
 const multer = require("multer");
@@ -291,22 +292,9 @@ router.get("/user", async (req, res) => {
     }
 });
 
-router.get("/all", async (req, res) => {
+router.get("/all", requireAdmin, async (_req, res) => {
     try {
-        const token = req.headers.authorization?.split(" ")[1];
-        if (!token) return res.status(401).json({ message: "Нет доступа" });
-
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-        // Проверяем, является ли пользователь админом
-        const user = await User.findByPk(decoded.id);
-        if (!user || user.role !== "admin") {
-            return res.status(403).json({ message: "Нет доступа" });
-        }
-
-        // Если админ, получаем все заказы
         const orders = await Order.findAll({ order: [["orderDate", "DESC"]] });
-
         res.json(orders);
     } catch (error) {
         console.error("Ошибка при получении всех заказов:", error);
