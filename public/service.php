@@ -3,17 +3,16 @@
 header("Access-Control-Allow-Origin: *");
 header("Access-Control-Allow-Methods: GET, POST, OPTIONS");
 header("Access-Control-Allow-Headers: Content-Type, Authorization");
+header("Access-Control-Expose-Headers: X-Total-Elements, X-Current-Page, X-Total-Pages, X-Service-Version, Server-Timing");
 
 header('Content-Type: application/json; charset=utf-8');
 ini_set('display_errors', '0');
 
-// JSON на любые необработанные исключения
 set_exception_handler(function (Throwable $e) {
     http_response_code(502);
     echo json_encode(['error' => 'exception', 'message' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
 });
 
-// JSON на фаталы/таймауты (вместо HTML)
 register_shutdown_function(function () {
     $e = error_get_last();
     if ($e && (stripos($e['message'] ?? '', 'Maximum execution time') !== false || $e['type'] === E_ERROR)) {
@@ -291,13 +290,12 @@ class service
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_HEADER         => true,
 
-            // 🔴 ключевые параметры
-            CURLOPT_CONNECTTIMEOUT => 5,   // ждать коннект не дольше 5с
-            CURLOPT_TIMEOUT        => 12,  // общий таймаут запроса < 30с php
-            CURLOPT_IPRESOLVE      => CURL_IPRESOLVE_V4, // обойти глюки с IPv6/DNS
-            CURLOPT_ENCODING       => '',  // принимать gzip/deflate
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_TIMEOUT        => 60,
+            CURLOPT_IPRESOLVE      => CURL_IPRESOLVE_V4,
+            CURLOPT_ENCODING       => '',
             CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
-            CURLOPT_FAILONERROR    => false, // сами обработаем код
+            CURLOPT_FAILONERROR    => false,
         ));
 
         $response   = curl_exec($ch);
@@ -314,13 +312,11 @@ class service
         $headersStr = substr($response, 0, $headerSize);
         $result     = substr($response, $headerSize);
 
-        // Если апстрим вернул не-JSON (например, HTML-страницу ошибки) — не пускаем это дальше
         $decoded = json_decode($result, true);
         if ($decoded === null) {
             throw new RuntimeException("Upstream returned non-JSON for $method (HTTP $status)");
         }
 
-        // Пробрасываем полезную мета-инфу
         $addedHeaders = $this->getHeaderValue($headersStr);
         return array('result' => json_encode($decoded, JSON_UNESCAPED_UNICODE), 'addedHeaders' => $addedHeaders);
     }
@@ -371,16 +367,20 @@ class service
     {
         $time = $this->startMetrics();
 
-        // Значения по умолчанию, если виджет не прислал фильтры
         if (empty($this->requestData['type'])) {
-            $this->requestData['type'] = 'PVZ'; // только пункты выдачи, без постаматов
+            $this->requestData['type'] = 'PVZ';
         }
         if (empty($this->requestData['country_code'])) {
             $this->requestData['country_code'] = 'RU';
         }
-        // Явно русскую локаль, чтобы не тянуть лишнее
         if (empty($this->requestData['lang'])) {
             $this->requestData['lang'] = 'rus';
+        }
+        if (empty($this->requestData['size'])) {
+            $this->requestData['size'] = 500;
+        }
+        if (!isset($this->requestData['page']) || $this->requestData['page'] === '') {
+            $this->requestData['page'] = 0;
         }
 
         $result = $this->httpRequest('deliverypoints', $this->requestData);
@@ -425,7 +425,6 @@ class service
 
     private function buildOrderPayload($data)
     {
-        // Если прилетел уже готовый payload — используем его как есть
         if (!empty($data['tariff_code']) && isset($data['recipient']) && (isset($data['to_location']) || isset($data['delivery_point']))) {
             $payload = $data;
             unset($payload['action']);
@@ -435,7 +434,6 @@ class service
             return $payload;
         }
 
-        // Иначе собираем из полей виджета
         $payload = array();
         $payload['type'] = 1;
 
@@ -478,7 +476,6 @@ class service
             $payload['comment'] = $data['comment'];
         }
 
-        // Оплата онлайн на сайте → в СДЭК стоимость доставки ставим 0 для получателя
         if (!empty($data['deliveryPayment']['payer']) && $data['deliveryPayment']['payer'] === 'sender') {
             $payload['delivery_recipient_cost'] = array('value' => 0);
             $payload['recipient_currency'] = 'RUB';
@@ -572,10 +569,10 @@ class service
         foreach ($goods as $idx => $g) {
             $weight = isset($g['weight_grams']) ? (int)$g['weight_grams'] : null;
             if ($weight === null && isset($g['weight'])) {
-                $weight = (int)round(((float)$g['weight']) * 1000); // kg → grams
+                $weight = (int)round(((float)$g['weight']) * 1000);
             }
             if ($weight === null || $weight <= 0) {
-                $weight = 100; // минимальный вес 100г, чтобы не завалить валидацию
+                $weight = 100;
             }
 
             $length = isset($g['length']) ? (int)$g['length'] : null;
