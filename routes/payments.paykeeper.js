@@ -17,7 +17,6 @@ router.get('/ping', (_req, res) => res.json({ ok: true }));
 router.post('/link', authMiddleware, async (req, res) => {
   try {
     const { orderId } = req.body;
-    console.log('[PK] /link for orderId=', orderId);
     const order = await Order.findByPk(orderId);
     if (!order) return res.status(404).json({ message: 'Order not found' });
     const isAdmin = req.user?.role === 'admin';

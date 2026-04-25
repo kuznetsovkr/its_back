@@ -26,8 +26,6 @@ const ENABLE_LOW_STOCK_CRON = process.env.ENABLE_LOW_STOCK_CRON === "1";
 if (ENABLE_TELEGRAM_BOTS) {
   require("./bots/lowStockBot");
   require("./bots/orderBot");
-} else {
-  console.log("[startup] Telegram bots are disabled (ENABLE_TELEGRAM_BOTS != 1)");
 }
 
 const app = express();
@@ -82,24 +80,19 @@ const start = async () => {
     await sequelize.authenticate();
     await sequelize.sync({ alter: true });
 
-    console.log("Database connected");
-
     if (ENABLE_LOW_STOCK_CRON) {
       checkAllAndNotify().catch((e) => console.error("Initial low-stock check error:", e));
 
       cron.schedule("9 * * * *", async () => {
-        console.log("Low-stock cron tick");
         try {
           await checkAllAndNotify();
         } catch (e) {
           console.error("Low-stock cron error:", e);
         }
       });
-    } else {
-      console.log("[startup] Low-stock cron is disabled (ENABLE_LOW_STOCK_CRON != 1)");
     }
 
-    app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+    app.listen(PORT);
   } catch (error) {
     console.error("Database connection error:", error);
   }

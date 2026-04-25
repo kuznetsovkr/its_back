@@ -12,7 +12,6 @@ const { findInventoryForOrder } = require("../services/inventoryResolver");
     if (inv) {
       o.inventoryId = inv.id;
       await o.save();
-      console.log("Linked", o.id, "->", inv.id);
     } else {
       console.warn("No inventory for order", o.id, o.productType, o.color, o.size);
     }

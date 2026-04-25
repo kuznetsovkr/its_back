@@ -116,14 +116,6 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
       return res.status(400).json({ message: "Введите фамилию и имя" });
     }
 
-    console.log("[ORDER] create draft", {
-      userId: user?.id || null,
-      productType,
-      color,
-      size,
-      embroideryType,
-    });
-
     // 5) Проверяем наличие на складе
     const inv = await findInventoryForOrder(productType, color, size);
     if (!inv) {
@@ -208,7 +200,6 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
     }
 
 
-    console.log("✅ Заказ успешно сохранён в БД", order.id);
     res.json({
       message: "Заказ успешно оформлен",
       orderId: order.id,
@@ -434,8 +425,6 @@ async function sendOrderToCdek({ order, body, totalPrice, deliveryAddress, phone
     payload.cdekTariffCode = payload.cdekTariff.tariff_code;
   }
 
-  console.log("[CDEK] Sending create_order for", payload.number, "to", `${serviceUrl}?action=create_order`);
-
   try {
     const resp = await axios.post(`${serviceUrl}?action=create_order`, payload, {
       headers: {
@@ -446,11 +435,7 @@ async function sendOrderToCdek({ order, body, totalPrice, deliveryAddress, phone
     });
     const data = resp?.data || {};
     const entity = data?.entity || {};
-    const requests = data?.requests || [];
-    const uuid = entity?.uuid || null;
     const cdekNumber = entity?.cdek_number || entity?.cdekNumber || null;
-    const state = requests?.[0]?.state || null;
-    console.log("[CDEK] create_order ok", { uuid, cdekNumber, state, url: resp?.config?.url });
     return { cdekNumber, data };
   } catch (e) {
     const resp = e.response;
