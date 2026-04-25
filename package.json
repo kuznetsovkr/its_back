@@ -7,7 +7,9 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node index.js",
     "start:demo": "node -r dotenv/config index.js dotenv_config_path=.env.demo",
-    "dev": "nodemon index.js"
+    "dev": "nodemon index.js",
+    "lint": "eslint . --ext .js",
+    "lint:fix": "npm run lint -- --fix"
   },
   "keywords": [],
   "author": "",
@@ -31,6 +33,7 @@
     "sharp": "^0.34.0"
   },
   "devDependencies": {
+    "eslint": "^8.57.1",
     "nodemon": "^3.1.9"
   }
 }

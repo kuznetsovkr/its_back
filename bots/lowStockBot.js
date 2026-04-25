@@ -2,8 +2,6 @@ require("dotenv").config();
 const TelegramBot = require("node-telegram-bot-api");
 const attachSubscriptionHandlers = require("./_subscribeHandlers");
 
-const TelegramSubscriber = require("../models/TelegramSubscriber");
-
 const token = process.env.TELEGRAM_LOW_BOT_TOKEN;
 if (!token) console.warn("⚠️ TELEGRAM_LOW_BOT_TOKEN не задан");
 

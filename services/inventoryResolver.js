@@ -5,7 +5,6 @@ const norm = (s) => String(s || "").trim().toLowerCase().replaceAll("ё", "е").
 const baseType = (s) => norm(s).replace(/\(.*?\)/g, "").trim(); // срезаем " (с начесом)"
 
 async function findInventoryForOrder(productType, color, size) {
-  const pt = norm(productType);
   const ptBase = baseType(productType);
   const col = norm(color);
   const sz = String(size || "").trim();

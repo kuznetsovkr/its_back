@@ -2,11 +2,7 @@ const express = require("express");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const Order = require("../models/Order");
-const sendOrderToTelegram = require("../telegram");
-const sequelize = require("../db");
 const axios = require("axios");
-const Inventory = require("../models/Inventory");
-const PaymentEvent = require("../models/PaymentEvent");
 const requireAdmin = require("../middleware/requireAdmin");
 const router = express.Router();
 
@@ -14,7 +10,6 @@ const multer = require("multer");
 const fs = require("fs");
 const path = require("path");
 const OrderAttachment = require("../models/OrderAttachment");
-const { checkItemAndNotify } = require("../services/lowStockMonitor"); // путь подкорректируй, если нужен
 const { findInventoryForOrder } = require("../services/inventoryResolver");
 const { finalizePaidOrder } = require("../services/orderFinalizer");
 
