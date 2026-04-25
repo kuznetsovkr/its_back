@@ -1,5 +1,6 @@
 const express = require("express");
 const ClothingType = require("../models/ClothingType");
+const requireAdmin = require("../middleware/requireAdmin");
 
 const router = express.Router();
 
@@ -13,7 +14,7 @@ router.get("/", async (_req, res) => {
     }
 });
 
-router.post("/", async (req, res) => {
+router.post("/", requireAdmin, async (req, res) => {
     try {
         const { name, price } = req.body;
         if (!name || price === undefined) {
@@ -28,7 +29,7 @@ router.post("/", async (req, res) => {
     }
 });
 
-router.put("/:id", async (req, res) => {
+router.put("/:id", requireAdmin, async (req, res) => {
     try {
         const { name, price } = req.body;
         const type = await ClothingType.findByPk(req.params.id);
@@ -48,7 +49,7 @@ router.put("/:id", async (req, res) => {
     }
 });
 
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", requireAdmin, async (req, res) => {
     try {
         const type = await ClothingType.findByPk(req.params.id);
         if (!type) {

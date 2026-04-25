@@ -5,6 +5,7 @@ const router = express.Router();
 
 const DEFAULT_CDEK_BASE_URL = "https://api.cdek.ru/v2";
 const AUTH_MARGIN_MS = 30_000;
+const CDEK_SERVICE_TOKEN = process.env.CDEK_SERVICE_TOKEN || process.env.JWT_SECRET || "";
 
 const tokenCache = {
   token: null,
@@ -228,7 +229,7 @@ const relayHeaders = (upstreamHeaders, res) => {
 const setCorsHeaders = (res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-CDEK-Service-Token");
   res.setHeader(
     "Access-Control-Expose-Headers",
     "X-Total-Elements, X-Current-Page, X-Total-Pages, X-Service-Version, Server-Timing"
@@ -263,6 +264,17 @@ router.all(["/service.php", "/api/service.php"], async (req, res) => {
       Accept: "application/json",
       "Content-Type": "application/json",
     };
+
+    if (action === "create_order" || action === "register_order") {
+      if (!CDEK_SERVICE_TOKEN) {
+        return res.status(500).json({ message: "CDEK service token is not configured" });
+      }
+
+      const incomingServiceToken = String(req.headers["x-cdek-service-token"] || "");
+      if (!incomingServiceToken || incomingServiceToken !== CDEK_SERVICE_TOKEN) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+    }
 
     if (action === "offices") {
       const params = {

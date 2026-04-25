@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Color = require('../models/Color');
+const requireAdmin = require("../middleware/requireAdmin");
 
 // GET /api/colors
 router.get('/', async (req, res) => {
@@ -14,7 +15,7 @@ router.get('/', async (req, res) => {
 });
 
 // POST /api/colors  body: { name, code }
-router.post('/', async (req, res) => {
+router.post('/', requireAdmin, async (req, res) => {
   try {
     const name = String(req.body?.name || '').trim();
     const code = String(req.body?.code || '').trim().toUpperCase();

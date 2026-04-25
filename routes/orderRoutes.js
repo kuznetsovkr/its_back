@@ -4,6 +4,7 @@ const User = require("../models/User");
 const Order = require("../models/Order");
 const axios = require("axios");
 const requireAdmin = require("../middleware/requireAdmin");
+const authMiddleware = require("../middleware/authMiddleware");
 const router = express.Router();
 
 const multer = require("multer");
@@ -15,12 +16,14 @@ const { finalizePaidOrder } = require("../services/orderFinalizer");
 
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, "..", "uploads");
 const upload = multer({ dest: "uploads/" }); // временно сохраняем файлы
+const CDEK_SERVICE_TOKEN = process.env.CDEK_SERVICE_TOKEN || process.env.JWT_SECRET || "";
+
+const normalizePhoneDigits = (value) => String(value || "").replace(/\D/g, "");
 
 // ✅ Создание заказа
 router.post("/create", upload.array("images", 10), async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
-    console.log("🔑 Заголовок Authorization:", authHeader);
 
     // 1) Авторизация (как было)
     let user = null;
@@ -28,9 +31,8 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
       try {
         const token = authHeader.split(" ")[1];
         user = jwt.verify(token, process.env.JWT_SECRET);
-        console.log("👤 Пользователь авторизован:", user);
       } catch (error) {
-        console.warn("⚠️ Ошибка при верификации токена:", error.message);
+        console.warn("Order create auth token rejected");
       }
     }
 
@@ -38,9 +40,6 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
     let profile = null;
     if (user) {
       profile = await User.findByPk(user.id, { raw: true });
-      console.log("✅ Данные авторизованного пользователя:", profile);
-    } else {
-      console.log("⚠️ Пользователь не авторизован, используем данные из запроса.");
     }
 
     // 3) Поля формы (multer кладёт строки в req.body)
@@ -117,10 +116,12 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
       return res.status(400).json({ message: "Введите фамилию и имя" });
     }
 
-    console.log("📦 Создание заказа с данными:", {
-      id: user?.id || null,
-      firstName, lastName, middleName, phone,
-      productType, color, size, embroideryType, customText, comment,
+    console.log("[ORDER] create draft", {
+      userId: user?.id || null,
+      productType,
+      color,
+      size,
+      embroideryType,
     });
 
     // 5) Проверяем наличие на складе
@@ -218,7 +219,7 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
     res.status(500).json({ message: "Ошибка оформления заказа", error: error.message });
   }
 });
-router.put("/update-status/:orderId", async (req, res) => {
+router.put("/update-status/:orderId", requireAdmin, async (req, res) => {
     try {
         const { orderId } = req.params;
         const { status } = req.body;
@@ -298,11 +299,48 @@ router.get("/all", requireAdmin, async (_req, res) => {
 });
 
 // POST /api/orders/confirm/:orderId
-router.post("/confirm/:orderId", async (req, res) => {
+router.post("/confirm/:orderId", authMiddleware, async (req, res) => {
   const { orderId } = req.params;
   const { provider = "manual", eventId, totalPrice, deliveryAddress } = req.body || {};
+  const allowedProviders = new Set(["manual", "fallback"]);
 
   try {
+    if (!allowedProviders.has(provider)) {
+      return res.status(403).json({ message: "Unsupported confirmation provider" });
+    }
+
+    const order = await Order.findByPk(orderId);
+    if (!order) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    const user = req.user || {};
+    const isAdmin = user.role === "admin";
+    const isOwnerById =
+      order.userId != null &&
+      Number.isFinite(Number(order.userId)) &&
+      Number(order.userId) === Number(user.id);
+    const isOwnerByPhone =
+      !order.userId &&
+      normalizePhoneDigits(order.phone) !== "" &&
+      normalizePhoneDigits(order.phone) === normalizePhoneDigits(user.phone);
+
+    if (!isAdmin && !isOwnerById && !isOwnerByPhone) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    if (
+      provider === "manual" &&
+      order.paymentProvider !== "manual" &&
+      order.paymentStatus !== "manual"
+    ) {
+      return res.status(409).json({ message: "Manual confirm is not allowed for this order" });
+    }
+
+    if (provider === "fallback" && order.paymentStatus !== "paid") {
+      return res.status(409).json({ message: "Payment is not confirmed yet" });
+    }
+
     const result = await finalizePaidOrder({
       orderId,
       provider,
@@ -400,7 +438,10 @@ async function sendOrderToCdek({ order, body, totalPrice, deliveryAddress, phone
 
   try {
     const resp = await axios.post(`${serviceUrl}?action=create_order`, payload, {
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-CDEK-Service-Token": CDEK_SERVICE_TOKEN,
+      },
       timeout: 10000,
     });
     const data = resp?.data || {};

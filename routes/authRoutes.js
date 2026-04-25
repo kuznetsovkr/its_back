@@ -4,95 +4,142 @@ const User = require("../models/User");
 require("dotenv").config();
 
 const router = express.Router();
-const smsCodes = new Map(); // phone -> code
+
+const smsChallenges = new Map(); // phone -> { code, expiresAt, attempts, requestedAt }
 
 const ADMIN_PHONE = process.env.ADMIN_PHONE;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+const SMS_CODE_TTL_MS = Number(process.env.SMS_CODE_TTL_MS || 5 * 60 * 1000);
+const SMS_REQUEST_COOLDOWN_MS = Number(process.env.SMS_REQUEST_COOLDOWN_MS || 60 * 1000);
+const SMS_MAX_VERIFY_ATTEMPTS = Number(process.env.SMS_MAX_VERIFY_ATTEMPTS || 5);
+const ENABLE_SMS_DEBUG_CODE =
+  process.env.ENABLE_SMS_DEBUG_CODE === "1" && process.env.NODE_ENV !== "production";
 
-const normalizePhone = (phone) => (phone ? phone.replace(/\D/g, "") : "");
+const normalizePhone = (phone) => (phone ? String(phone).replace(/\D/g, "") : "");
+const isRu11Phone = (phone) => /^\d{11}$/.test(phone) && phone.startsWith("7");
 
 const signUserToken = (payload) =>
-    jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: "24h" });
+  jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: "24h" });
 
 router.post("/request-sms", async (req, res) => {
-    console.log("[AUTH] request-sms payload:", req.body);
+  if (!req.body || !req.body.phone) {
+    return res.status(400).json({ message: "Неверный запрос: нужен phone" });
+  }
 
-    if (!req.body || !req.body.phone) {
-        return res.status(400).json({ message: "Неверный запрос: нужен phone" });
-    }
+  const normalizedPhone = normalizePhone(req.body.phone);
+  if (!isRu11Phone(normalizedPhone)) {
+    return res.status(400).json({ message: "Введите корректный номер телефона" });
+  }
 
-    const phone = req.body.phone;
-    const normalizedPhone = normalizePhone(phone);
-    const normalizedAdminPhone = normalizePhone(ADMIN_PHONE || "");
+  const normalizedAdminPhone = normalizePhone(ADMIN_PHONE || "");
+  if (normalizedPhone === normalizedAdminPhone) {
+    return res.json({
+      authMode: "password",
+      message: "Для администратора используйте вход по паролю",
+    });
+  }
 
-    if (normalizedPhone === normalizedAdminPhone) {
-        return res.json({ authMode: "password", message: "Для администратора используйте вход по паролю" });
-    }
+  const now = Date.now();
+  const existing = smsChallenges.get(normalizedPhone);
+  const resendInMs = existing ? existing.requestedAt + SMS_REQUEST_COOLDOWN_MS - now : 0;
+  if (resendInMs > 0) {
+    return res.status(429).json({
+      message: `Повторная отправка через ${Math.ceil(resendInMs / 1000)} сек`,
+    });
+  }
 
-    const smsCode = Math.floor(1000 + Math.random() * 9000);
-    smsCodes.set(normalizedPhone, smsCode);
-    console.log(`[AUTH] generated sms code for ${normalizedPhone}: ${smsCode}`);
+  const smsCode = String(Math.floor(1000 + Math.random() * 9000));
+  smsChallenges.set(normalizedPhone, {
+    code: smsCode,
+    expiresAt: now + SMS_CODE_TTL_MS,
+    attempts: 0,
+    requestedAt: now,
+  });
 
-    return res.json({ message: "Код отправлен (dev)", debugCode: smsCode });
+  const response = { message: "Код отправлен" };
+  if (ENABLE_SMS_DEBUG_CODE) {
+    response.debugCode = smsCode;
+  }
+  return res.json(response);
 });
 
 router.post("/login", async (req, res) => {
-    try {
-        const { phone, smsCode } = req.body || {};
-        if (!phone || !smsCode) {
-            return res.status(400).json({ message: "Нужны phone и smsCode" });
-        }
-
-        const normalizedPhone = normalizePhone(phone);
-        console.log(`[AUTH] login attempt for ${normalizedPhone}`);
-
-        const validCode = smsCodes.get(normalizedPhone);
-        if (!validCode || validCode != smsCode) {
-            return res.status(400).json({ message: "Неверный код" });
-        }
-        smsCodes.delete(normalizedPhone);
-
-        let user = await User.findOne({ where: { phone: normalizedPhone } });
-        if (!user) {
-            console.log("[AUTH] user not found, creating...");
-            user = await User.create({ phone: normalizedPhone, role: "user" });
-        } else if (!user.role) {
-            user.role = "user";
-            await user.save();
-        }
-
-        const token = signUserToken({ id: user.id, role: user.role, phone: user.phone });
-
-        return res.json({ token, user });
-    } catch (error) {
-        console.error("[AUTH] login error:", error);
-        return res.status(500).json({ message: "Ошибка авторизации" });
+  try {
+    const { phone, smsCode } = req.body || {};
+    if (!phone || !smsCode) {
+      return res.status(400).json({ message: "Нужны phone и smsCode" });
     }
+
+    const normalizedPhone = normalizePhone(phone);
+    if (!isRu11Phone(normalizedPhone)) {
+      return res.status(400).json({ message: "Введите корректный номер телефона" });
+    }
+
+    const challenge = smsChallenges.get(normalizedPhone);
+    if (!challenge) {
+      return res.status(400).json({ message: "Код не запрошен" });
+    }
+
+    if (Date.now() > challenge.expiresAt) {
+      smsChallenges.delete(normalizedPhone);
+      return res.status(400).json({ message: "Срок действия кода истек" });
+    }
+
+    if (challenge.attempts >= SMS_MAX_VERIFY_ATTEMPTS) {
+      smsChallenges.delete(normalizedPhone);
+      return res.status(429).json({ message: "Превышено число попыток. Запросите новый код" });
+    }
+
+    if (String(challenge.code) !== String(smsCode)) {
+      challenge.attempts += 1;
+      if (challenge.attempts >= SMS_MAX_VERIFY_ATTEMPTS) {
+        smsChallenges.delete(normalizedPhone);
+        return res.status(429).json({ message: "Превышено число попыток. Запросите новый код" });
+      }
+      smsChallenges.set(normalizedPhone, challenge);
+      return res.status(400).json({ message: "Неверный код" });
+    }
+
+    smsChallenges.delete(normalizedPhone);
+
+    let user = await User.findOne({ where: { phone: normalizedPhone } });
+    if (!user) {
+      user = await User.create({ phone: normalizedPhone, role: "user" });
+    } else if (!user.role) {
+      user.role = "user";
+      await user.save();
+    }
+
+    const token = signUserToken({ id: user.id, role: user.role, phone: user.phone });
+    return res.json({ token, user });
+  } catch (error) {
+    console.error("[AUTH] login error:", error);
+    return res.status(500).json({ message: "Ошибка авторизации" });
+  }
 });
 
 router.post("/admin-login", async (req, res) => {
-    const { phone, password } = req.body || {};
-    const normalizedPhone = normalizePhone(phone);
+  const { phone, password } = req.body || {};
+  const normalizedPhone = normalizePhone(phone);
 
-    if (normalizedPhone !== normalizePhone(ADMIN_PHONE)) {
-        return res.status(403).json({ message: "Доступ запрещён" });
-    }
+  if (normalizedPhone !== normalizePhone(ADMIN_PHONE)) {
+    return res.status(403).json({ message: "Доступ запрещен" });
+  }
 
-    if (password !== ADMIN_PASSWORD) {
-        return res.status(401).json({ message: "Неверный пароль" });
-    }
+  if (password !== ADMIN_PASSWORD) {
+    return res.status(401).json({ message: "Неверный пароль" });
+  }
 
-    let adminUser = await User.findOne({ where: { phone: normalizedPhone } });
-    if (!adminUser) {
-        adminUser = await User.create({ phone: normalizedPhone, role: "admin" });
-    } else if (adminUser.role !== "admin") {
-        adminUser.role = "admin";
-        await adminUser.save();
-    }
+  let adminUser = await User.findOne({ where: { phone: normalizedPhone } });
+  if (!adminUser) {
+    adminUser = await User.create({ phone: normalizedPhone, role: "admin" });
+  } else if (adminUser.role !== "admin") {
+    adminUser.role = "admin";
+    await adminUser.save();
+  }
 
-    const token = signUserToken({ id: adminUser.id, role: adminUser.role, phone: adminUser.phone });
-
-    res.json({ token, user: adminUser });
+  const token = signUserToken({ id: adminUser.id, role: adminUser.role, phone: adminUser.phone });
+  res.json({ token, user: adminUser });
 });
 
 module.exports = router;
