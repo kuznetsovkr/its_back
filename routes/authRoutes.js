@@ -26,7 +26,7 @@ router.post("/request-sms", async (req, res) => {
     const normalizedAdminPhone = normalizePhone(ADMIN_PHONE || "");
 
     if (normalizedPhone === normalizedAdminPhone) {
-        return res.json({ message: "Для администратора используйте вход по паролю" });
+        return res.json({ authMode: "password", message: "Для администратора используйте вход по паролю" });
     }
 
     const smsCode = Math.floor(1000 + Math.random() * 9000);
