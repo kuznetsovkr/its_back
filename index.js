@@ -22,6 +22,8 @@ require("./models/OrderAttachment");
 
 const ENABLE_TELEGRAM_BOTS = process.env.ENABLE_TELEGRAM_BOTS === "1";
 const ENABLE_LOW_STOCK_CRON = process.env.ENABLE_LOW_STOCK_CRON === "1";
+const ENABLE_DB_ALTER_SYNC = process.env.ENABLE_DB_ALTER_SYNC === "1";
+const ENABLE_STARTUP_WARNINGS = process.env.ENABLE_STARTUP_WARNINGS === "1";
 
 if (ENABLE_TELEGRAM_BOTS) {
   require("./bots/lowStockBot");
@@ -72,13 +74,19 @@ if (fs.existsSync(FRONTEND_INDEX_FILE)) {
     return res.sendFile(FRONTEND_INDEX_FILE);
   });
 } else {
-  console.warn(`[startup] Frontend build not found: ${FRONTEND_INDEX_FILE}`);
+  if (ENABLE_STARTUP_WARNINGS) {
+    console.warn(`[startup] Frontend build not found: ${FRONTEND_INDEX_FILE}`);
+  }
 }
 
 const start = async () => {
   try {
     await sequelize.authenticate();
-    await sequelize.sync({ alter: true });
+    if (ENABLE_DB_ALTER_SYNC) {
+      await sequelize.sync({ alter: true });
+    } else {
+      await sequelize.sync();
+    }
 
     if (ENABLE_LOW_STOCK_CRON) {
       checkAllAndNotify().catch((e) => console.error("Initial low-stock check error:", e));
@@ -92,7 +100,15 @@ const start = async () => {
       });
     }
 
-    app.listen(PORT);
+    const server = app.listen(PORT);
+    server.on("error", (error) => {
+      if (error && error.code === "EADDRINUSE") {
+        console.error(`Server start error: port ${PORT} is already in use`);
+      } else {
+        console.error("Server start error:", error);
+      }
+      process.exit(1);
+    });
   } catch (error) {
     console.error("Database connection error:", error);
   }
