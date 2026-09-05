@@ -1,6 +1,6 @@
 const express = require("express");
 const jwt = require("jsonwebtoken");
-const User = require("../models/User");
+const requireAdmin = require("../middleware/requireAdmin");
 require("dotenv").config();
 
 const router = express.Router();
@@ -18,7 +18,7 @@ const ENABLE_SMS_DEBUG_CODE =
 const normalizePhone = (phone) => (phone ? String(phone).replace(/\D/g, "") : "");
 const isRu11Phone = (phone) => /^\d{11}$/.test(phone) && phone.startsWith("7");
 
-const signUserToken = (payload) =>
+const signAuthToken = (payload) =>
   jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: "24h" });
 
 router.post("/request-sms", async (req, res) => {
@@ -29,14 +29,6 @@ router.post("/request-sms", async (req, res) => {
   const normalizedPhone = normalizePhone(req.body.phone);
   if (!isRu11Phone(normalizedPhone)) {
     return res.status(400).json({ message: "Введите корректный номер телефона" });
-  }
-
-  const normalizedAdminPhone = normalizePhone(ADMIN_PHONE || "");
-  if (normalizedPhone === normalizedAdminPhone) {
-    return res.json({
-      authMode: "password",
-      message: "Для администратора используйте вход по паролю",
-    });
   }
 
   const now = Date.now();
@@ -102,16 +94,9 @@ router.post("/login", async (req, res) => {
 
     smsChallenges.delete(normalizedPhone);
 
-    let user = await User.findOne({ where: { phone: normalizedPhone } });
-    if (!user) {
-      user = await User.create({ phone: normalizedPhone, role: "user" });
-    } else if (!user.role) {
-      user.role = "user";
-      await user.save();
-    }
-
-    const token = signUserToken({ id: user.id, role: user.role, phone: user.phone });
-    return res.json({ token, user });
+    const role = "user";
+    const token = signAuthToken({ phone: normalizedPhone, role });
+    return res.json({ token, phone: normalizedPhone, role });
   } catch (error) {
     console.error("[AUTH] login error:", error);
     return res.status(500).json({ message: "Ошибка авторизации" });
@@ -122,6 +107,10 @@ router.post("/admin-login", async (req, res) => {
   const { phone, password } = req.body || {};
   const normalizedPhone = normalizePhone(phone);
 
+  if (!ADMIN_PHONE || !ADMIN_PASSWORD) {
+    return res.status(503).json({ message: "Вход администратора не настроен" });
+  }
+
   if (normalizedPhone !== normalizePhone(ADMIN_PHONE)) {
     return res.status(403).json({ message: "Доступ запрещен" });
   }
@@ -130,16 +119,13 @@ router.post("/admin-login", async (req, res) => {
     return res.status(401).json({ message: "Неверный пароль" });
   }
 
-  let adminUser = await User.findOne({ where: { phone: normalizedPhone } });
-  if (!adminUser) {
-    adminUser = await User.create({ phone: normalizedPhone, role: "admin" });
-  } else if (adminUser.role !== "admin") {
-    adminUser.role = "admin";
-    await adminUser.save();
-  }
+  const role = "admin";
+  const token = signAuthToken({ phone: normalizedPhone, role });
+  return res.json({ token, phone: normalizedPhone, role });
+});
 
-  const token = signUserToken({ id: adminUser.id, role: adminUser.role, phone: adminUser.phone });
-  res.json({ token, user: adminUser });
+router.get("/admin-session", requireAdmin, (req, res) => {
+  return res.json({ role: "admin" });
 });
 
 module.exports = router;

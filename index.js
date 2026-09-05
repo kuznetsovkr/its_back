@@ -8,7 +8,6 @@ const cron = require("node-cron");
 const sequelize = require("./db");
 const cdekRoutes = require("./routes/cdekRoutes");
 const cdekServiceRoutes = require("./routes/cdekServiceRoutes");
-const userRoutes = require("./routes/userRoutes");
 const authRoutes = require("./routes/authRoutes");
 const orderRoutes = require("./routes/orderRoutes");
 const inventoryRoutes = require("./routes/inventoryRoutes");
@@ -43,7 +42,6 @@ app.use(express.json());
 app.use("/api/auth", authRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/cdek", cdekRoutes);
-app.use("/api/user", userRoutes);
 app.use("/api/inventory", inventoryRoutes);
 app.use("/api/clothing-types", clothingTypeRoutes);
 app.use("/api/upload", uploadRoutes);
@@ -83,7 +81,7 @@ const start = async () => {
   try {
     await sequelize.authenticate();
     if (ENABLE_DB_ALTER_SYNC) {
-      await sequelize.sync({ alter: true });
+      await sequelize.sync({ alter: { drop: false } });
     } else {
       await sequelize.sync();
     }

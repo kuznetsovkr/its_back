@@ -20,12 +20,10 @@ router.post('/link', authMiddleware, async (req, res) => {
     const order = await Order.findByPk(orderId);
     if (!order) return res.status(404).json({ message: 'Order not found' });
     const isAdmin = req.user?.role === 'admin';
-    const isOwnerById = order.userId != null && Number(order.userId) === Number(req.user?.id);
     const isOwnerByPhone =
-      order.userId == null &&
       normalizePhoneDigits(order.phone) !== '' &&
       normalizePhoneDigits(order.phone) === normalizePhoneDigits(req.user?.phone);
-    if (!isAdmin && !isOwnerById && !isOwnerByPhone) {
+    if (!isAdmin && !isOwnerByPhone) {
       return res.status(403).json({ message: 'Forbidden' });
     }
     if (order.paymentStatus === 'paid') return res.status(409).json({ message: 'Order already paid' });

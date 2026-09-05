@@ -1,6 +1,4 @@
 const express = require("express");
-const jwt = require("jsonwebtoken");
-const User = require("../models/User");
 const Order = require("../models/Order");
 const axios = require("axios");
 const requireAdmin = require("../middleware/requireAdmin");
@@ -23,26 +21,7 @@ const normalizePhoneDigits = (value) => String(value || "").replace(/\D/g, "");
 // ✅ Создание заказа
 router.post("/create", upload.array("images", 10), async (req, res) => {
   try {
-    const authHeader = req.headers.authorization;
-
-    // 1) Авторизация (как было)
-    let user = null;
-    if (authHeader) {
-      try {
-        const token = authHeader.split(" ")[1];
-        user = jwt.verify(token, process.env.JWT_SECRET);
-      } catch (error) {
-        console.warn("Order create auth token rejected");
-      }
-    }
-
-    // 2) Забираем профиль (если есть)
-    let profile = null;
-    if (user) {
-      profile = await User.findByPk(user.id, { raw: true });
-    }
-
-    // 3) Поля формы (multer кладёт строки в req.body)
+    // Поля формы (multer кладёт строки в req.body)
     const body = req.body || {};
     const safe = (v) => (v == null ? "" : String(v));
     const toNumberOrNull = (v) => {
@@ -50,11 +29,10 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
       return Number.isFinite(n) ? n : null;
     };
 
-    // ⬇️ Приоритет: formData → профиль → пусто
-    const firstName        = safe(body.firstName)   || safe(profile?.firstName);
-    const lastName         = safe(body.lastName)    || safe(profile?.lastName);
-    const middleName       = safe(body.middleName)  || safe(profile?.middleName);
-    const phone            = safe(body.phone)       || safe(profile?.phone);
+    const firstName        = safe(body.firstName);
+    const lastName         = safe(body.lastName);
+    const middleName       = safe(body.middleName);
+    const phone            = safe(body.phone);
     const productType      = safe(body.productType);
     const color            = safe(body.color);
     const size             = safe(body.size);
@@ -129,7 +107,6 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
 
     // 6) Создаём заказ
     const order = await Order.create({
-      userId: user?.id || null,
       phone,
       firstName,
       lastName,
@@ -261,24 +238,6 @@ router.get("/status/:orderId", async (req, res) => {
     }
 });
 
-// 🔹 Получение заказов текущего пользователя
-router.get("/user", async (req, res) => {
-    try {
-        const token = req.headers.authorization?.split(" ")[1];
-        if (!token) return res.status(401).json({ message: "Нет доступа" });
-
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        const userId = decoded.id;
-
-        const orders = await Order.findAll({ where: { userId }, order: [["orderDate", "DESC"]] });
-
-        res.json(orders);
-    } catch (error) {
-        console.error("Ошибка при получении заказов:", error);
-        res.status(500).json({ message: "Ошибка сервера" });
-    }
-});
-
 router.get("/all", requireAdmin, async (_req, res) => {
     try {
         const orders = await Order.findAll({ order: [["orderDate", "DESC"]] });
@@ -307,16 +266,11 @@ router.post("/confirm/:orderId", authMiddleware, async (req, res) => {
 
     const user = req.user || {};
     const isAdmin = user.role === "admin";
-    const isOwnerById =
-      order.userId != null &&
-      Number.isFinite(Number(order.userId)) &&
-      Number(order.userId) === Number(user.id);
     const isOwnerByPhone =
-      !order.userId &&
       normalizePhoneDigits(order.phone) !== "" &&
       normalizePhoneDigits(order.phone) === normalizePhoneDigits(user.phone);
 
-    if (!isAdmin && !isOwnerById && !isOwnerByPhone) {
+    if (!isAdmin && !isOwnerByPhone) {
       return res.status(403).json({ message: "Forbidden" });
     }
 

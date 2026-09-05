@@ -1,10 +1,8 @@
 const { DataTypes } = require("sequelize");
 const sequelize = require("../db");
-const User = require("./User");
 
 const Order = sequelize.define("order", {
   id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
-  userId: { type: DataTypes.INTEGER, allowNull: true, references: { model: User, key: "id" }, onDelete: "SET NULL" },
 
   // Inventory linkage
   inventoryId: { type: DataTypes.INTEGER, allowNull: true, references: { model: "inventories", key: "id" }, onDelete: "SET NULL" },
