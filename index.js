@@ -13,8 +13,10 @@ const orderRoutes = require("./routes/orderRoutes");
 const inventoryRoutes = require("./routes/inventoryRoutes");
 const clothingTypeRoutes = require("./routes/clothingTypeRoutes");
 const uploadRoutes = require("./routes/uploadRoutes");
+const fileRoutes = require("./routes/fileRoutes");
 const colorsRouter = require("./routes/colors");
 const { checkAllAndNotify } = require("./services/lowStockMonitor");
+const { clearTemporaryUploads } = require("./lib/uploadSecurity");
 
 require("./models/TelegramSubscriber");
 require("./models/OrderAttachment");
@@ -31,7 +33,6 @@ if (ENABLE_TELEGRAM_BOTS) {
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, "uploads");
 const FRONTEND_BUILD_DIR =
   process.env.FRONTEND_BUILD_DIR || path.resolve(__dirname, "..", "its_prototype", "build");
 const FRONTEND_INDEX_FILE = path.join(FRONTEND_BUILD_DIR, "index.html");
@@ -45,11 +46,13 @@ app.use("/api/cdek", cdekRoutes);
 app.use("/api/inventory", inventoryRoutes);
 app.use("/api/clothing-types", clothingTypeRoutes);
 app.use("/api/upload", uploadRoutes);
+app.use("/api/uploads", fileRoutes);
 app.use("/api/colors", colorsRouter);
 app.use(cdekServiceRoutes);
 
-app.use("/api/uploads", express.static(UPLOAD_DIR));
-app.use("/uploads", express.static(UPLOAD_DIR));
+app.use("/uploads", (_req, res) => {
+  res.status(404).json({ message: "Direct file access is disabled" });
+});
 
 const paykeeperRouter = require("./routes/payments.paykeeper");
 app.use("/api/payments/paykeeper", paykeeperRouter);
@@ -62,7 +65,6 @@ if (fs.existsSync(FRONTEND_INDEX_FILE)) {
     if (
       req.path.startsWith("/api/") ||
       req.path === "/api" ||
-      req.path.startsWith("/uploads") ||
       req.path.startsWith("/payments/") ||
       req.path === "/service.php"
     ) {
@@ -79,6 +81,7 @@ if (fs.existsSync(FRONTEND_INDEX_FILE)) {
 
 const start = async () => {
   try {
+    await clearTemporaryUploads();
     await sequelize.authenticate();
     if (ENABLE_DB_ALTER_SYNC) {
       await sequelize.sync({ alter: { drop: false } });

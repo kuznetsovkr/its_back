@@ -3,23 +3,45 @@ const Order = require("../models/Order");
 const axios = require("axios");
 const requireAdmin = require("../middleware/requireAdmin");
 const authMiddleware = require("../middleware/authMiddleware");
+const { orderCreateRateLimit } = require("../middleware/rateLimit");
 const router = express.Router();
 
-const multer = require("multer");
 const fs = require("fs");
 const path = require("path");
 const OrderAttachment = require("../models/OrderAttachment");
 const { findInventoryForOrder } = require("../services/inventoryResolver");
 const { finalizePaidOrder } = require("../services/orderFinalizer");
+const {
+  ORDER_UPLOAD_DIR,
+  cleanupTemporaryFilesAfterResponse,
+  inspectStoredImage,
+  isPathInside,
+  orderImagesUpload,
+  persistValidatedImage,
+  sanitizeOriginalName,
+  streamImage,
+  uploadErrorHandler,
+  validateUploadedImages,
+} = require("../lib/uploadSecurity");
 
-const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, "..", "uploads");
-const upload = multer({ dest: "uploads/" }); // временно сохраняем файлы
 const CDEK_SERVICE_TOKEN = process.env.CDEK_SERVICE_TOKEN || process.env.JWT_SECRET || "";
 
 const normalizePhoneDigits = (value) => String(value || "").replace(/\D/g, "");
+const canAccessOrder = (user, order) => {
+  if (user?.role === "admin") return true;
+  const userPhone = normalizePhoneDigits(user?.phone);
+  return userPhone !== "" && userPhone === normalizePhoneDigits(order?.phone);
+};
 
 // ✅ Создание заказа
-router.post("/create", upload.array("images", 10), async (req, res) => {
+router.post(
+  "/create",
+  authMiddleware,
+  orderCreateRateLimit,
+  orderImagesUpload,
+  validateUploadedImages,
+  cleanupTemporaryFilesAfterResponse,
+  async (req, res) => {
   try {
     // Поля формы (multer кладёт строки в req.body)
     const body = req.body || {};
@@ -69,6 +91,14 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
       (embroideryType || "").trim().toLowerCase()
     );
     const isManualFlow = isCustomEmbroidery || !hasNumericPrice;
+
+    if (!canAccessOrder(req.user, { phone })) {
+      return res.status(403).json({ message: "Нельзя оформить заказ на другой номер телефона" });
+    }
+
+    if ((embroideryType || "").trim().toLowerCase() === "petface" && (req.files || []).length > 5) {
+      return res.status(400).json({ message: "Для портрета питомца можно загрузить не более 5 изображений" });
+    }
 
     // Оформление адреса с пометкой СДЭК + режим
     const modeLabel = cdekMode === "door" ? "до двери" : cdekMode === "office" ? "до ПВЗ" : "";
@@ -130,34 +160,38 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
     });
 
     // 📎 Сохранить прикреплённые файлы как вложения заказа
+    const persistedPaths = [];
     try {
-    const orderDir = path.join(UPLOAD_DIR, "orders", String(order.id));
-    fs.mkdirSync(orderDir, { recursive: true });
+      const orderDir = path.join(ORDER_UPLOAD_DIR, String(order.id));
+      const attachments = [];
 
-    const attachments = [];
-    for (const f of (req.files || [])) {
-        const ext = path.extname(f.originalname || "") || ".jpg";
-        const fileName = `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
-        const finalAbs = path.join(orderDir, fileName);
-
-        // переносим из временной папки multer
-        fs.renameSync(f.path, finalAbs);
-
+      for (const file of (req.files || [])) {
+        const stored = await persistValidatedImage(file, orderDir);
+        persistedPaths.push(stored.path);
         attachments.push({
-        orderId: order.id,
-        path: finalAbs,              // абсолютный путь — удобно для fs.createReadStream
-        mime: f.mimetype,
-        originalName: f.originalname,
-        size: f.size,
+          orderId: order.id,
+          path: stored.path,
+          mime: stored.mime,
+          originalName: sanitizeOriginalName(file.originalname, stored.fileName),
+          size: file.size,
         });
-    }
+      }
 
-    if (attachments.length) {
+      if (attachments.length) {
         await OrderAttachment.bulkCreate(attachments);
-    }
+      }
     } catch (e) {
-    console.error("⚠️ Не удалось сохранить вложения заказа:", e);
-    // не роняем оформление — вложения опциональны
+      await Promise.all(
+        persistedPaths.map((filePath) =>
+          fs.promises.unlink(filePath).catch((error) => {
+            if (error.code !== "ENOENT") {
+              console.warn(`[uploads] Failed to remove incomplete attachment: ${error.message}`);
+            }
+          })
+        )
+      );
+      console.error("⚠️ Не удалось сохранить вложения заказа:", e);
+      // Не роняем оформление — вложения опциональны.
     }
 
     let cdekResult = null;
@@ -186,7 +220,8 @@ router.post("/create", upload.array("images", 10), async (req, res) => {
     console.error("❌ Ошибка оформления заказа:", error);
     res.status(500).json({ message: "Ошибка оформления заказа", error: error.message });
   }
-});
+  }
+);
 router.put("/update-status/:orderId", requireAdmin, async (req, res) => {
     try {
         const { orderId } = req.params;
@@ -302,6 +337,87 @@ router.post("/confirm/:orderId", authMiddleware, async (req, res) => {
   }
 });
 
+router.get("/:orderId/attachments", authMiddleware, async (req, res) => {
+  const orderId = Number(req.params.orderId);
+  if (!Number.isInteger(orderId) || orderId < 1) {
+    return res.status(400).json({ message: "Некорректный номер заказа" });
+  }
+
+  try {
+    const order = await Order.findByPk(orderId);
+    if (!order) return res.status(404).json({ message: "Заказ не найден" });
+    if (!canAccessOrder(req.user, order)) {
+      return res.status(403).json({ message: "Нет доступа к вложениям заказа" });
+    }
+
+    const attachments = await OrderAttachment.findAll({
+      where: { orderId },
+      attributes: ["id", "originalName", "mime", "size"],
+      order: [["id", "ASC"]],
+    });
+
+    return res.json(
+      attachments.map((attachment) => ({
+        id: attachment.id,
+        originalName: attachment.originalName,
+        mime: attachment.mime,
+        size: attachment.size,
+        downloadUrl: `/api/orders/${orderId}/attachments/${attachment.id}`,
+      }))
+    );
+  } catch (error) {
+    console.error("[uploads] Failed to list order attachments:", error);
+    return res.status(500).json({ message: "Не удалось получить вложения заказа" });
+  }
+});
+
+router.get("/:orderId/attachments/:attachmentId", authMiddleware, async (req, res, next) => {
+  const orderId = Number(req.params.orderId);
+  const attachmentId = Number(req.params.attachmentId);
+  if (
+    !Number.isInteger(orderId) ||
+    orderId < 1 ||
+    !Number.isInteger(attachmentId) ||
+    attachmentId < 1
+  ) {
+    return res.status(400).json({ message: "Некорректный номер вложения" });
+  }
+
+  try {
+    const order = await Order.findByPk(orderId);
+    if (!order) return res.status(404).json({ message: "Заказ не найден" });
+    if (!canAccessOrder(req.user, order)) {
+      return res.status(403).json({ message: "Нет доступа к вложениям заказа" });
+    }
+
+    const attachment = await OrderAttachment.findOne({
+      where: { id: attachmentId, orderId },
+    });
+    if (!attachment) {
+      return res.status(404).json({ message: "Вложение не найдено" });
+    }
+
+    const filePath = path.resolve(String(attachment.path || ""));
+    if (!isPathInside(ORDER_UPLOAD_DIR, filePath)) {
+      return res.status(404).json({ message: "Вложение не найдено" });
+    }
+
+    const info = await inspectStoredImage(filePath);
+    return streamImage({
+      res,
+      next,
+      filePath,
+      info,
+      downloadName: attachment.originalName || `attachment-${attachment.id}${info.extension}`,
+    });
+  } catch (error) {
+    if (["ENOENT", "INVALID_STORED_IMAGE"].includes(error.code)) {
+      return res.status(404).json({ message: "Вложение не найдено" });
+    }
+    return next(error);
+  }
+});
+
 // 👉 ДОЛЖЕН быть в самом конце файла, перед module.exports
 router.get('/:id', async (req, res) => {
   const id = Number(req.params.id);
@@ -401,5 +517,7 @@ async function sendOrderToCdek({ order, body, totalPrice, deliveryAddress, phone
     throw e;
   }
 }
+
+router.use(uploadErrorHandler);
 
 module.exports = router;

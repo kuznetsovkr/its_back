@@ -1,31 +1,42 @@
-const express = require('express');
-const multer  = require('multer');
-const path    = require('path');
+const express = require("express");
+const requireAdmin = require("../middleware/requireAdmin");
+const { adminUploadRateLimit } = require("../middleware/rateLimit");
+const {
+  INVENTORY_UPLOAD_DIR,
+  cleanupTemporaryFilesAfterResponse,
+  inventoryImageUpload,
+  persistValidatedImage,
+  uploadErrorHandler,
+  validateUploadedImages,
+} = require("../lib/uploadSecurity");
 
 const router = express.Router();
 
-// используем тот же каталог, что и в index.js
-const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, '..', 'uploads');
+router.post(
+  "/",
+  requireAdmin,
+  adminUploadRateLimit,
+  inventoryImageUpload,
+  validateUploadedImages,
+  cleanupTemporaryFilesAfterResponse,
+  async (req, res, next) => {
+    if (!req.file) {
+      return res.status(400).json({ message: "Файл не загружен" });
+    }
 
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
-  filename: (_req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    cb(null, uniqueSuffix + path.extname(file.originalname));
-  },
-});
-const upload = multer({ storage });
+    try {
+      const stored = await persistValidatedImage(req.file, INVENTORY_UPLOAD_DIR);
+      return res.status(201).json({
+        imageUrl: `/api/uploads/inventory/${stored.fileName}`,
+        filename: stored.fileName,
+        ok: true,
+      });
+    } catch (error) {
+      return next(error);
+    }
+  }
+);
 
-// POST /api/upload  (поле: image)
-router.post('/', upload.single('image'), (req, res) => {
-  if (!req.file) return res.status(400).json({ message: 'Файл не загружен' });
-
-  // сразу отдаём удобный URL (новый путь под /api)
-  res.status(201).json({
-    imageUrl: `/api/uploads/${req.file.filename}`,
-    filename: req.file.filename,
-    ok: true,
-  });
-});
+router.use(uploadErrorHandler);
 
 module.exports = router;
