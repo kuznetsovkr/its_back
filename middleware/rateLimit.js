@@ -54,8 +54,16 @@ const orderCreateRateLimit = createRateLimiter({
   message: "Слишком много попыток оформления заказа. Повторите попытку позднее",
 });
 
+const pricingQuoteRateLimit = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 120,
+  keyPrefix: "pricing-quote",
+  message: "Слишком много запросов расчёта стоимости. Повторите попытку позднее",
+});
+
 module.exports = {
   adminUploadRateLimit,
   createRateLimiter,
   orderCreateRateLimit,
+  pricingQuoteRateLimit,
 };

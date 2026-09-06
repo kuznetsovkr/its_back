@@ -18,6 +18,11 @@ const OrderAttachment = require("../models/OrderAttachment");
 const { findInventoryForOrder } = require("../services/inventoryResolver");
 const { finalizePaidOrder } = require("../services/orderFinalizer");
 const {
+  PricingError,
+  calculateCdekDelivery,
+  calculateMerchandisePrice,
+} = require("../services/orderPricing");
+const {
   ORDER_UPLOAD_DIR,
   cleanupTemporaryFilesAfterResponse,
   inspectStoredImage,
@@ -90,14 +95,9 @@ router.post(
     const parsedCdekAddr   = parseJson(body.cdekAddress) || {};
     const cdekPvzCode      = safe(parsedCdekAddr.code || body.cdekPvzCode || body.cdekCode || parsedCdekAddr.office_code);
 
-    const rawTotalPrice    = body.totalPrice;
-    const parsedTotalPrice = Number(rawTotalPrice);
-    const hasNumericPrice  = Number.isFinite(parsedTotalPrice);
-    const totalPrice       = hasNumericPrice ? parsedTotalPrice : null;
     const isCustomEmbroidery = ["custom", "other", "другая", "другое"].includes(
       (embroideryType || "").trim().toLowerCase()
     );
-    const isManualFlow = isCustomEmbroidery || !hasNumericPrice;
 
     if (!phone) {
       return res.status(400).json({ message: "Введите корректный номер телефона" });
@@ -146,15 +146,41 @@ router.post(
       return res.status(409).json({ message: "Недостаточно товара на складе" });
     }
 
+    const merchandiseQuote = calculateMerchandisePrice({
+      inventory: inv,
+      embroideryType,
+      patronusCount,
+      petFaceCount,
+    });
+    const isManualFlow = merchandiseQuote.manual || !cdekMode;
+    const cdekQuote = isManualFlow
+      ? null
+      : await calculateCdekDelivery({
+          inventory: inv,
+          cdekMode,
+          cdekAddress: parsedCdekAddr,
+        });
+    const totalPrice = isManualFlow
+      ? null
+      : merchandiseQuote.merchandisePrice + cdekQuote.deliveryPrice;
+    const canonicalDeliveryAddress = cdekQuote
+      ? [
+          "СДЭК",
+          cdekQuote.office.code,
+          cdekQuote.office.location?.address,
+          "до ПВЗ",
+        ].filter(Boolean).join(", ")
+      : deliveryAddressForStore;
+
     // 6) Создаём заказ
     const order = await Order.create({
       phone,
       firstName,
       lastName,
       middleName,
-      productType,
-      color,
-      size,
+      productType: inv.productType,
+      color: inv.color,
+      size: inv.size,
       embroideryType,
       embroideryTypeRu,
       patronusCount,
@@ -166,7 +192,7 @@ router.post(
       paymentStatus: isManualFlow ? "manual" : "pending",
       paymentProvider: isManualFlow ? "manual" : null,
       totalPrice,
-      deliveryAddress: deliveryAddressForStore,
+      deliveryAddress: canonicalDeliveryAddress,
       inventoryId: inv.id,
     });
 
@@ -206,13 +232,13 @@ router.post(
     }
 
     let cdekResult = null;
-    if (cdekMode) {
+    if (cdekQuote) {
       try {
         cdekResult = await sendOrderToCdek({
           order,
           body: req.body,
-          totalPrice: totalPrice ?? 0,
-          deliveryAddress: deliveryAddressRaw,
+          merchandisePrice: merchandiseQuote.merchandisePrice,
+          cdekQuote,
           phone,
           nameParts: { firstName, lastName, middleName },
         });
@@ -227,8 +253,12 @@ router.post(
       orderId: order.id,
       orderToken: createOrderAccessToken(order.id),
       cdekNumber: cdekResult?.cdekNumber || null,
+      pricePending: isManualFlow,
     });
   } catch (error) {
+    if (error instanceof PricingError) {
+      return res.status(error.statusCode).json({ message: error.message, code: error.code });
+    }
     console.error("❌ Ошибка оформления заказа:", error);
     res.status(500).json({ message: "Ошибка оформления заказа", error: error.message });
   }
@@ -453,7 +483,7 @@ router.get('/:id', requireOrderAccess, async (req, res) => {
 
 
 
-async function sendOrderToCdek({ order, body, totalPrice, deliveryAddress, phone, nameParts }) {
+async function sendOrderToCdek({ order, body, merchandisePrice, cdekQuote, phone, nameParts }) {
   const serviceUrl =
     process.env.CDEK_SERVICE_URL ||
     (process.env.PUBLIC_APP_URL ? `${process.env.PUBLIC_APP_URL}/service.php` : "http://localhost:5000/service.php");
@@ -463,47 +493,35 @@ async function sendOrderToCdek({ order, body, totalPrice, deliveryAddress, phone
     return;
   }
 
-  const parseMaybeJson = (val) => {
-    if (!val) return null;
-    if (typeof val === "string") {
-      try {
-        return JSON.parse(val);
-      } catch {
-        return null;
-      }
-    }
-    return val;
-  };
-
-  const cdekTariff = parseMaybeJson(body.cdekTariff) || body.cdekTariff;
-  const cdekAddress = parseMaybeJson(body.cdekAddress) || body.cdekAddress;
-  const cdekGoods = parseMaybeJson(body.cdekGoods) || body.cdekGoods;
-  const cdekFrom = parseMaybeJson(body.cdekFrom) || body.cdekFrom;
-  const deliveryPayment = parseMaybeJson(body.deliveryPayment) || body.deliveryPayment;
+  const officeAddress = cdekQuote.office.location?.address || "";
+  const packagePreset = cdekQuote.packages[0];
 
   const payload = {
     action: "create_order", // дублируем в body на случай, если query потеряется
     number: order.id,
-    cdekMode: body.cdekMode,
-    cdekTariffCode: body.cdekTariffCode,
-    cdekTariff,
-    cdekAddress,
-    cdekAddressLabel: body.cdekAddressLabel,
-    cdekGoods,
-    cdekFrom,
+    cdekMode: "office",
+    cdekTariffCode: cdekQuote.tariffCode,
+    cdekTariff: cdekQuote.tariff,
+    cdekAddress: cdekQuote.office,
+    cdekAddressLabel: officeAddress,
+    cdekGoods: [{
+      name: order.productType,
+      ware_key: `ORDER-${order.id}`,
+      width: packagePreset.width,
+      height: packagePreset.height,
+      length: packagePreset.length,
+      weight_grams: packagePreset.weight,
+    }],
+    cdekFrom: cdekQuote.from,
     recipientFullName:
       body.recipientFullName ||
       [nameParts.lastName, nameParts.firstName, nameParts.middleName].filter(Boolean).join(" "),
     recipientPhoneDigits: body.recipientPhoneDigits || phone,
-    totalPrice,
-    deliveryPayment,
-    deliveryAddress,
+    totalPrice: merchandisePrice,
+    deliveryPayment: { payer: "sender", paidByUserOnSite: true },
+    deliveryAddress: officeAddress,
     comment: body.comment,
   };
-
-  if (!payload.cdekTariffCode && payload.cdekTariff && payload.cdekTariff.tariff_code) {
-    payload.cdekTariffCode = payload.cdekTariff.tariff_code;
-  }
 
   try {
     const resp = await axios.post(`${serviceUrl}?action=create_order`, payload, {
