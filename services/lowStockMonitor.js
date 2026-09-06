@@ -40,13 +40,13 @@ async function checkItemAndNotify(inventoryId) {
     // Не слать повторно, если уже слали и не было "восстановления"
     const already = await LowStockAlert.findOne({ where: { inventoryId, clearedAt: { [Op.is]: null } } });
     if (!already) {
-      await sendLowStockAlert([{
+      const delivered = await sendLowStockAlert([{
         productType: item.productType,
         color: item.color,
         size: item.size,
         quantity: item.quantity,
       }], THRESHOLD);
-      await markNotified(inventoryId);
+      if (delivered > 0) await markNotified(inventoryId);
     }
   } else {
     // Если восстановили остаток — очищаем флаг
@@ -73,7 +73,7 @@ async function checkAllAndNotify() {
   const fresh = lowItems.filter(i => !alertedIds.has(i.id));
 
   if (fresh.length) {
-    await sendLowStockAlert(
+    const delivered = await sendLowStockAlert(
       fresh.map(i => ({
         productType: i.productType,
         color: i.color,
@@ -81,8 +81,10 @@ async function checkAllAndNotify() {
         quantity: i.quantity,
       })), THRESHOLD
     );
-    // Помечаем как отправленные
-    await Promise.all(fresh.map(i => markNotified(i.id)));
+    // Помечаем как отправленные только после фактической доставки уведомления.
+    if (delivered > 0) {
+      await Promise.all(fresh.map(i => markNotified(i.id)));
+    }
   }
 
   // И наоборот: у кого восстановился остаток — снимаем флаг

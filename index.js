@@ -18,18 +18,28 @@ const fileRoutes = require("./routes/fileRoutes");
 const colorsRouter = require("./routes/colors");
 const { checkAllAndNotify } = require("./services/lowStockMonitor");
 const { clearTemporaryUploads } = require("./lib/uploadSecurity");
+const {
+  TELEGRAM_CHANNELS,
+  getTelegramChannelConfig,
+  validateTelegramChannelConfig,
+} = require("./services/telegramChannels");
 
-require("./models/TelegramSubscriber");
+require("./models/TelegramChannelSubscriber");
 require("./models/OrderAttachment");
 
-const ENABLE_TELEGRAM_BOTS = process.env.ENABLE_TELEGRAM_BOTS === "1";
 const ENABLE_LOW_STOCK_CRON = process.env.ENABLE_LOW_STOCK_CRON === "1";
 const ENABLE_DB_ALTER_SYNC = process.env.ENABLE_DB_ALTER_SYNC === "1";
 const ENABLE_STARTUP_WARNINGS = process.env.ENABLE_STARTUP_WARNINGS === "1";
 
-if (ENABLE_TELEGRAM_BOTS) {
-  require("./bots/lowStockBot");
+const orderTelegramConfig = getTelegramChannelConfig(TELEGRAM_CHANNELS.ORDERS);
+const lowStockTelegramConfig = getTelegramChannelConfig(TELEGRAM_CHANNELS.LOW_STOCK);
+validateTelegramChannelConfig([orderTelegramConfig, lowStockTelegramConfig]);
+
+if (orderTelegramConfig.enabled) {
   require("./bots/orderBot");
+}
+if (lowStockTelegramConfig.enabled) {
+  require("./bots/lowStockBot");
 }
 
 const app = express();

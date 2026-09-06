@@ -1,13 +1,19 @@
 require("dotenv").config();
 const TelegramBot = require("node-telegram-bot-api");
 const attachSubscriptionHandlers = require("./_subscribeHandlers");
+const {
+  TELEGRAM_CHANNELS,
+  getTelegramChannelConfig,
+} = require("../services/telegramChannels");
 
-const token = process.env.TELEGRAM_BOT_TOKEN;
-if (!token) console.warn("⚠️ TELEGRAM_BOT_TOKEN не задан");
+const channel = TELEGRAM_CHANNELS.ORDERS;
+const channelConfig = getTelegramChannelConfig(channel);
 
-const bot = new TelegramBot(token, { polling: true });
+const bot = new TelegramBot(channelConfig.token, { polling: true });
 
 attachSubscriptionHandlers(bot, {
+  channel,
+  channelConfig,
   welcomeText:
     "✅ Подписка оформлена! Я буду присылать *уведомления о заказах*.\n\nКоманды:\n/stop — отписаться",
   stopText:

@@ -1,28 +1,64 @@
-const TelegramSubscriber = require("../models/TelegramSubscriber");
+const TelegramChannelSubscriber = require("../models/TelegramChannelSubscriber");
+const { isChatAllowed } = require("../services/telegramChannels");
 
 module.exports = function attachSubscriptionHandlers(
   bot,
   {
+    channel,
+    channelConfig,
+    subscriberModel = TelegramChannelSubscriber,
     welcomeText = "🎉 Подписка оформлена! Я буду присылать уведомления.\n\nКоманды:\n/stop — отписаться",
     stopText = "🛑 Ок, больше не буду присылать уведомления. (/start чтобы подписаться снова)",
+    forbiddenText = "⛔ Этот Telegram-аккаунт не добавлен в список разрешённых получателей.",
+    errorText = "Не удалось изменить подписку. Попробуйте ещё раз позднее.",
   } = {}
 ) {
+  if (!channel || !channelConfig) {
+    throw new Error("Telegram subscription channel is not configured");
+  }
+
+  const registerCommand = (pattern, handler) => {
+    bot.onText(pattern, async (msg) => {
+      try {
+        await handler(msg);
+      } catch (error) {
+        const chatId = String(msg?.chat?.id || "");
+        console.error(`[telegram:${channel}] Subscription command failed:`, error.message);
+        if (chatId) {
+          await bot.sendMessage(chatId, errorText).catch(() => {});
+        }
+      }
+    });
+  };
+
   // /start — подписывает
-  bot.onText(/^\/start\b/i, async (msg) => {
+  registerCommand(/^\/start\b/i, async (msg) => {
     const chatId = String(msg.chat.id);
+    if (!isChatAllowed(channelConfig, chatId)) {
+      await bot.sendMessage(chatId, forbiddenText);
+      return;
+    }
+
     const { username, first_name: firstName, last_name: lastName } = msg.from || {};
-    await TelegramSubscriber.upsert({ chatId, username, firstName, lastName, isActive: true });
-    bot.sendMessage(chatId, welcomeText);
+    await subscriberModel.upsert({
+      channel,
+      chatId,
+      username,
+      firstName,
+      lastName,
+      isActive: true,
+    });
+    await bot.sendMessage(chatId, welcomeText, { parse_mode: "Markdown" });
   });
 
   // /stop — отписывает
-  bot.onText(/^\/stop\b/i, async (msg) => {
+  registerCommand(/^\/stop\b/i, async (msg) => {
     const chatId = String(msg.chat.id);
-    const sub = await TelegramSubscriber.findOne({ where: { chatId } });
+    const sub = await subscriberModel.findOne({ where: { channel, chatId } });
     if (sub) {
       sub.isActive = false;
       await sub.save();
     }
-    bot.sendMessage(chatId, stopText);
+    await bot.sendMessage(chatId, stopText, { parse_mode: "Markdown" });
   });
 };

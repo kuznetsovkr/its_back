@@ -1,47 +1,37 @@
 const axios = require("axios");
 const FormData = require("form-data");
 const fs = require("fs");
-require("dotenv").config();
+const {
+  TELEGRAM_CHANNELS,
+  getTelegramChannelConfig,
+  getTelegramRecipients,
+} = require("./services/telegramChannels");
 
-const TelegramSubscriber = require("./models/TelegramSubscriber");
-
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const ADMIN_CHAT = process.env.TELEGRAM_CHAT_ID || null;
-
-if (!BOT_TOKEN) {
-  console.warn("Пустой TELEGRAM_BOT_TOKEN в .env");
-}
-
-async function getRecipients(extraChatIds = []) {
-  const set = new Set();
-  if (ADMIN_CHAT) set.add(String(ADMIN_CHAT));
-  try {
-    const subs = await TelegramSubscriber.findAll({ where: { isActive: true } });
-    subs.forEach((s) => s.chatId && set.add(String(s.chatId)));
-  } catch (e) {
-    console.error("Ошибка чтения подписчиков Telegram:", e.message);
-  }
-  (extraChatIds || []).forEach((id) => id && set.add(String(id)));
-  return Array.from(set);
-}
+const CHANNEL = TELEGRAM_CHANNELS.ORDERS;
 
 async function sendText(chatId, text) {
+  const { enabled, token } = getTelegramChannelConfig(CHANNEL);
+  if (!enabled || !token || !chatId) return false;
   try {
-    await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+    await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
       chat_id: chatId,
       text,
       parse_mode: "Markdown",
       disable_web_page_preview: true,
     });
+    return true;
   } catch (e) {
     console.error(`TG sendMessage(${chatId}) error:`, e.response?.data || e.message);
+    return false;
   }
 }
 
 async function sendPhoto(chatId, fileOrId, filename) {
+  const { enabled, token } = getTelegramChannelConfig(CHANNEL);
+  if (!enabled || !token || !chatId) return null;
   try {
     if (typeof fileOrId === "string" && !Buffer.isBuffer(fileOrId)) {
-      await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, {
+      await axios.post(`https://api.telegram.org/bot${token}/sendPhoto`, {
         chat_id: chatId,
         photo: fileOrId,
       });
@@ -52,7 +42,7 @@ async function sendPhoto(chatId, fileOrId, filename) {
     form.append("photo", fileOrId, { filename: filename || "photo.jpg" });
 
     const resp = await axios.post(
-      `https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`,
+      `https://api.telegram.org/bot${token}/sendPhoto`,
       form,
       { headers: form.getHeaders() }
     );
@@ -119,18 +109,7 @@ const formatPaidAt = (ts) => {
 /**
  * Отправляет заказ в Telegram (основная инфа + комментарий + медиа)
  */
-const sendOrderToTelegram = async (order, attachmentsOrOpts = [], maybeOpts = {}) => {
-  let attachments = [];
-  let opts = {};
-
-  if (Array.isArray(attachmentsOrOpts)) {
-    attachments = attachmentsOrOpts;
-    opts = maybeOpts || {};
-  } else if (attachmentsOrOpts && typeof attachmentsOrOpts === "object") {
-    opts = attachmentsOrOpts;
-  }
-
-  const { extraChatIds = [], includeAdmin = true } = opts;
+const sendOrderToTelegram = async (order, attachments = []) => {
 
   const comment = (order.comment || "").trim();
   const embroidery = embroideryLabel(order);
@@ -160,10 +139,7 @@ const sendOrderToTelegram = async (order, attachmentsOrOpts = [], maybeOpts = {}
 
   const commentMessage = comment ? `💬 Комментарий:\n${md(comment)}` : null;
 
-  let recipients = await getRecipients(extraChatIds);
-  if (!includeAdmin && ADMIN_CHAT) {
-    recipients = recipients.filter((id) => id !== String(ADMIN_CHAT));
-  }
+  const recipients = await getTelegramRecipients(CHANNEL);
   if (!recipients.length) {
     console.warn("Нет получателей Telegram, рассылка пропущена");
     return;
