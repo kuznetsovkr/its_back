@@ -2,8 +2,14 @@ const express = require("express");
 const Order = require("../models/Order");
 const axios = require("axios");
 const requireAdmin = require("../middleware/requireAdmin");
-const authMiddleware = require("../middleware/authMiddleware");
 const { orderCreateRateLimit } = require("../middleware/rateLimit");
+const requireTrustedOrigin = require("../middleware/trustedOrigin");
+const {
+  canAccessOrder,
+  createOrderAccessToken,
+  requireOrderAccess,
+  requireOrderAccessConfigured,
+} = require("../middleware/orderAccess");
 const router = express.Router();
 
 const fs = require("fs");
@@ -26,17 +32,18 @@ const {
 
 const CDEK_SERVICE_TOKEN = process.env.CDEK_SERVICE_TOKEN || process.env.JWT_SECRET || "";
 
-const normalizePhoneDigits = (value) => String(value || "").replace(/\D/g, "");
-const canAccessOrder = (user, order) => {
-  if (user?.role === "admin") return true;
-  const userPhone = normalizePhoneDigits(user?.phone);
-  return userPhone !== "" && userPhone === normalizePhoneDigits(order?.phone);
+const normalizeCustomerPhone = (value) => {
+  let digits = String(value || "").replace(/\D/g, "");
+  if (digits.length === 10) digits = `7${digits}`;
+  if (digits.length === 11 && digits.startsWith("8")) digits = `7${digits.slice(1)}`;
+  return /^7\d{10}$/.test(digits) ? `+${digits}` : null;
 };
 
 // ✅ Создание заказа
 router.post(
   "/create",
-  authMiddleware,
+  requireTrustedOrigin,
+  requireOrderAccessConfigured,
   orderCreateRateLimit,
   orderImagesUpload,
   validateUploadedImages,
@@ -54,7 +61,7 @@ router.post(
     const firstName        = safe(body.firstName);
     const lastName         = safe(body.lastName);
     const middleName       = safe(body.middleName);
-    const phone            = safe(body.phone);
+    const phone            = normalizeCustomerPhone(body.phone);
     const productType      = safe(body.productType);
     const color            = safe(body.color);
     const size             = safe(body.size);
@@ -92,8 +99,12 @@ router.post(
     );
     const isManualFlow = isCustomEmbroidery || !hasNumericPrice;
 
-    if (!canAccessOrder(req.user, { phone })) {
-      return res.status(403).json({ message: "Нельзя оформить заказ на другой номер телефона" });
+    if (!phone) {
+      return res.status(400).json({ message: "Введите корректный номер телефона" });
+    }
+
+    if (String(body.privacyConsent).toLowerCase() !== "true") {
+      return res.status(400).json({ message: "Необходимо согласие на обработку персональных данных" });
     }
 
     if ((embroideryType || "").trim().toLowerCase() === "petface" && (req.files || []).length > 5) {
@@ -214,6 +225,7 @@ router.post(
     res.json({
       message: "Заказ успешно оформлен",
       orderId: order.id,
+      orderToken: createOrderAccessToken(order.id),
       cdekNumber: cdekResult?.cdekNumber || null,
     });
   } catch (error) {
@@ -257,13 +269,17 @@ router.put("/update-status/:orderId", requireAdmin, async (req, res) => {
 });
 
 // 🔍 Проверка статуса заказа по номеру
-router.get("/status/:orderId", async (req, res) => {
+router.get("/status/:orderId", requireOrderAccess, async (req, res) => {
     try {
         const { orderId } = req.params;
         const order = await Order.findByPk(orderId);
 
         if (!order) {
             return res.status(404).json({ message: "Заказ не найден" });
+        }
+
+        if (!canAccessOrder(req, order)) {
+            return res.status(403).json({ message: "Нет доступа к заказу" });
         }
 
         res.json({ status: order.status });
@@ -284,9 +300,9 @@ router.get("/all", requireAdmin, async (_req, res) => {
 });
 
 // POST /api/orders/confirm/:orderId
-router.post("/confirm/:orderId", authMiddleware, async (req, res) => {
+router.post("/confirm/:orderId", requireOrderAccess, async (req, res) => {
   const { orderId } = req.params;
-  const { provider = "manual", eventId, totalPrice, deliveryAddress } = req.body || {};
+  const { provider = "manual" } = req.body || {};
   const allowedProviders = new Set(["manual", "fallback"]);
 
   try {
@@ -299,13 +315,7 @@ router.post("/confirm/:orderId", authMiddleware, async (req, res) => {
       return res.status(404).json({ message: "Order not found" });
     }
 
-    const user = req.user || {};
-    const isAdmin = user.role === "admin";
-    const isOwnerByPhone =
-      normalizePhoneDigits(order.phone) !== "" &&
-      normalizePhoneDigits(order.phone) === normalizePhoneDigits(user.phone);
-
-    if (!isAdmin && !isOwnerByPhone) {
+    if (!canAccessOrder(req, order)) {
       return res.status(403).json({ message: "Forbidden" });
     }
 
@@ -324,8 +334,7 @@ router.post("/confirm/:orderId", authMiddleware, async (req, res) => {
     const result = await finalizePaidOrder({
       orderId,
       provider,
-      eventId: eventId || `${provider}-${orderId}`,
-      overrides: { totalPrice, deliveryAddress },
+      eventId: `${provider}-${orderId}`,
     });
 
     if (!result.ok && result.message) {
@@ -337,7 +346,7 @@ router.post("/confirm/:orderId", authMiddleware, async (req, res) => {
   }
 });
 
-router.get("/:orderId/attachments", authMiddleware, async (req, res) => {
+router.get("/:orderId/attachments", requireOrderAccess, async (req, res) => {
   const orderId = Number(req.params.orderId);
   if (!Number.isInteger(orderId) || orderId < 1) {
     return res.status(400).json({ message: "Некорректный номер заказа" });
@@ -346,7 +355,7 @@ router.get("/:orderId/attachments", authMiddleware, async (req, res) => {
   try {
     const order = await Order.findByPk(orderId);
     if (!order) return res.status(404).json({ message: "Заказ не найден" });
-    if (!canAccessOrder(req.user, order)) {
+    if (!canAccessOrder(req, order)) {
       return res.status(403).json({ message: "Нет доступа к вложениям заказа" });
     }
 
@@ -371,7 +380,7 @@ router.get("/:orderId/attachments", authMiddleware, async (req, res) => {
   }
 });
 
-router.get("/:orderId/attachments/:attachmentId", authMiddleware, async (req, res, next) => {
+router.get("/:orderId/attachments/:attachmentId", requireOrderAccess, async (req, res, next) => {
   const orderId = Number(req.params.orderId);
   const attachmentId = Number(req.params.attachmentId);
   if (
@@ -386,7 +395,7 @@ router.get("/:orderId/attachments/:attachmentId", authMiddleware, async (req, re
   try {
     const order = await Order.findByPk(orderId);
     if (!order) return res.status(404).json({ message: "Заказ не найден" });
-    if (!canAccessOrder(req.user, order)) {
+    if (!canAccessOrder(req, order)) {
       return res.status(403).json({ message: "Нет доступа к вложениям заказа" });
     }
 
@@ -419,12 +428,13 @@ router.get("/:orderId/attachments/:attachmentId", authMiddleware, async (req, re
 });
 
 // 👉 ДОЛЖЕН быть в самом конце файла, перед module.exports
-router.get('/:id', async (req, res) => {
+router.get('/:id', requireOrderAccess, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ message: 'Bad id' });
 
   const order = await Order.findByPk(id);
   if (!order) return res.status(404).json({ message: 'Order not found' });
+  if (!canAccessOrder(req, order)) return res.status(403).json({ message: 'Forbidden' });
 
   // Отдаём только то, что нужно фронту
   res.json({

@@ -49,7 +49,7 @@ const adminUploadRateLimit = createRateLimiter({
 
 const orderCreateRateLimit = createRateLimiter({
   windowMs: 15 * 60 * 1000,
-  max: (req) => (req.user?.role === "admin" ? 30 : 6),
+  max: 6,
   keyPrefix: "order-create",
   message: "Слишком много попыток оформления заказа. Повторите попытку позднее",
 });

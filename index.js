@@ -33,6 +33,9 @@ if (ENABLE_TELEGRAM_BOTS) {
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+if (process.env.TRUST_PROXY === "1") {
+  app.set("trust proxy", 1);
+}
 const FRONTEND_BUILD_DIR =
   process.env.FRONTEND_BUILD_DIR || path.resolve(__dirname, "..", "its_prototype", "build");
 const FRONTEND_INDEX_FILE = path.join(FRONTEND_BUILD_DIR, "index.html");

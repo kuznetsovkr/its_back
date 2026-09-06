@@ -7,7 +7,9 @@ const { after, test } = require("node:test");
 const testUploadRoot = fs.mkdtempSync(path.join(os.tmpdir(), "its-upload-root-"));
 process.env.UPLOAD_DIR = testUploadRoot;
 process.env.JWT_SECRET = "test-only-jwt-secret-that-is-long-enough";
+process.env.ORDER_ACCESS_SECRET = "test-only-order-secret-that-is-long-enough";
 process.env.ADMIN_PHONE = "79990000000";
+process.env.ADMIN_PASSWORD = "test-only-admin-password";
 
 const {
   detectImageTypeFromBuffer,
@@ -38,14 +40,10 @@ test("allows only a single safe file-name segment", () => {
   assert.equal(resolveSafeFilePath(root, "folder/photo.png"), null);
 });
 
-test("rate limiter blocks repeated requests by the authenticated identity", async (t) => {
+test("rate limiter blocks repeated requests by the client address", async (t) => {
   const express = require("express");
   const { createRateLimiter } = require("../middleware/rateLimit");
   const app = express();
-  app.use((req, _res, next) => {
-    req.user = { role: "user", phone: "79990000001" };
-    next();
-  });
   app.get(
     "/limited",
     createRateLimiter({ windowMs: 60_000, max: 2, keyPrefix: "test", message: "Limited" }),
@@ -63,6 +61,39 @@ test("rate limiter blocks repeated requests by the authenticated identity", asyn
   const blocked = await fetch(url);
   assert.equal(blocked.status, 429);
   assert.equal(blocked.headers.get("retry-after"), "60");
+});
+
+test("production order requests require the configured browser origin", async (t) => {
+  const express = require("express");
+  const requireTrustedOrigin = require("../middleware/trustedOrigin");
+  const previousNodeEnv = process.env.NODE_ENV;
+  const previousOrigins = process.env.ALLOWED_PUBLIC_ORIGINS;
+  process.env.NODE_ENV = "production";
+  process.env.ALLOWED_PUBLIC_ORIGINS = "https://shop.example";
+  t.after(() => {
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+    if (previousOrigins === undefined) delete process.env.ALLOWED_PUBLIC_ORIGINS;
+    else process.env.ALLOWED_PUBLIC_ORIGINS = previousOrigins;
+  });
+
+  const app = express();
+  app.post("/order", requireTrustedOrigin, (_req, res) => res.json({ ok: true }));
+  const server = await new Promise((resolve) => {
+    const listener = app.listen(0, "127.0.0.1", () => resolve(listener));
+  });
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const url = `http://127.0.0.1:${server.address().port}/order`;
+  assert.equal((await fetch(url, { method: "POST" })).status, 403);
+  assert.equal(
+    (await fetch(url, { method: "POST", headers: { Origin: "https://evil.example" } })).status,
+    403
+  );
+  assert.equal(
+    (await fetch(url, { method: "POST", headers: { Origin: "https://shop.example" } })).status,
+    200
+  );
 });
 
 test("sanitizes an original file name before storing it as metadata", () => {
@@ -194,9 +225,54 @@ test("admin upload is protected, validated and served only through the image con
   assert.deepEqual(temporaryFiles, []);
 });
 
-test("order attachments require authentication and the token phone must own the order", async (t) => {
+test("guest order token grants access to one order without user authentication", async (t) => {
   const express = require("express");
   const jwt = require("jsonwebtoken");
+  const {
+    canAccessOrder,
+    createOrderAccessToken,
+    requireOrderAccess,
+  } = require("../middleware/orderAccess");
+  const app = express();
+  app.get("/orders/:orderId", requireOrderAccess, (req, res) => {
+    if (!canAccessOrder(req, Number(req.params.orderId))) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+    return res.json({ ok: true });
+  });
+
+  const server = await new Promise((resolve) => {
+    const listener = app.listen(0, "127.0.0.1", () => resolve(listener));
+  });
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  const orderToken = createOrderAccessToken(42);
+
+  assert.equal((await fetch(`${baseUrl}/orders/42`)).status, 401);
+
+  const allowedResponse = await fetch(`${baseUrl}/orders/42`, {
+    headers: { "X-Order-Access-Token": orderToken },
+  });
+  assert.equal(allowedResponse.status, 200);
+
+  const otherOrderResponse = await fetch(`${baseUrl}/orders/43`, {
+    headers: { "X-Order-Access-Token": orderToken },
+  });
+  assert.equal(otherOrderResponse.status, 403);
+
+  const adminToken = jwt.sign(
+    { role: "admin", phone: process.env.ADMIN_PHONE },
+    process.env.JWT_SECRET
+  );
+  const adminResponse = await fetch(`${baseUrl}/orders/43`, {
+    headers: { Authorization: `Bearer ${adminToken}` },
+  });
+  assert.equal(adminResponse.status, 200);
+});
+
+test("public order creation validates phone and privacy consent before database access", async (t) => {
+  const express = require("express");
   const orderRoutes = require("../routes/orderRoutes");
   const app = express();
   app.use("/api/orders", orderRoutes);
@@ -205,32 +281,59 @@ test("order attachments require authentication and the token phone must own the 
     const listener = app.listen(0, "127.0.0.1", () => resolve(listener));
   });
   t.after(() => new Promise((resolve) => server.close(resolve)));
-
   const url = `http://127.0.0.1:${server.address().port}/api/orders/create`;
-  const token = jwt.sign(
-    { role: "user", phone: "79990000001" },
-    process.env.JWT_SECRET
-  );
-  const onePixelPng = Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-    "base64"
-  );
-  const makeOrderForm = () => {
-    const form = new FormData();
-    form.append("firstName", "Test");
-    form.append("lastName", "User");
-    form.append("phone", "+7 999 000-00-02");
-    form.append("images", new Blob([onePixelPng], { type: "image/png" }), "pet.png");
-    return form;
-  };
 
-  const anonymousResponse = await fetch(url, { method: "POST", body: makeOrderForm() });
-  assert.equal(anonymousResponse.status, 401);
+  const invalidPhone = new FormData();
+  invalidPhone.append("firstName", "Test");
+  invalidPhone.append("lastName", "User");
+  invalidPhone.append("phone", "123");
+  invalidPhone.append("privacyConsent", "true");
+  assert.equal((await fetch(url, { method: "POST", body: invalidPhone })).status, 400);
 
-  const wrongOwnerResponse = await fetch(url, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
-    body: makeOrderForm(),
+  const missingConsent = new FormData();
+  missingConsent.append("firstName", "Test");
+  missingConsent.append("lastName", "User");
+  missingConsent.append("phone", "+7 999 000-00-01");
+  missingConsent.append("privacyConsent", "false");
+  assert.equal((await fetch(url, { method: "POST", body: missingConsent })).status, 400);
+});
+
+test("SMS and user login endpoints are removed while admin JWT login remains", async (t) => {
+  const express = require("express");
+  const authRoutes = require("../routes/authRoutes");
+  const app = express();
+  app.use(express.json());
+  app.use("/api/auth", authRoutes);
+
+  const server = await new Promise((resolve) => {
+    const listener = app.listen(0, "127.0.0.1", () => resolve(listener));
   });
-  assert.equal(wrongOwnerResponse.status, 403);
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  assert.equal(
+    (await fetch(`${baseUrl}/api/auth/request-sms`, { method: "POST" })).status,
+    404
+  );
+  assert.equal(
+    (await fetch(`${baseUrl}/api/auth/login`, { method: "POST" })).status,
+    404
+  );
+
+  const loginResponse = await fetch(`${baseUrl}/api/auth/admin-login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      phone: process.env.ADMIN_PHONE,
+      password: process.env.ADMIN_PASSWORD,
+    }),
+  });
+  assert.equal(loginResponse.status, 200);
+  const { token, role } = await loginResponse.json();
+  assert.equal(role, "admin");
+
+  const sessionResponse = await fetch(`${baseUrl}/api/auth/admin-session`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert.equal(sessionResponse.status, 200);
 });

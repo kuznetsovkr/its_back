@@ -4,26 +4,21 @@ const router = express.Router();
 const { createInvoice } = require('../lib/paykeeper');
 const Order = require('../models/Order');
 const { finalizePaidOrder } = require('../services/orderFinalizer');
-const authMiddleware = require('../middleware/authMiddleware');
+const { canAccessOrder, requireOrderAccess } = require('../middleware/orderAccess');
 
 const { PAYKEEPER_SECRET_SEED } = process.env;
 const fmt2 = (n) => Number(n).toFixed(2);
-const normalizePhoneDigits = (value) => String(value || '').replace(/\D/g, '');
 
 router.get('/ping', (_req, res) => res.json({ ok: true }));
 
 // 2.1 Получить ссылку на оплату (всегда 1 ₽)
 // routes/payments.paykeeper.js
-router.post('/link', authMiddleware, async (req, res) => {
+router.post('/link', requireOrderAccess, async (req, res) => {
   try {
     const { orderId } = req.body;
     const order = await Order.findByPk(orderId);
     if (!order) return res.status(404).json({ message: 'Order not found' });
-    const isAdmin = req.user?.role === 'admin';
-    const isOwnerByPhone =
-      normalizePhoneDigits(order.phone) !== '' &&
-      normalizePhoneDigits(order.phone) === normalizePhoneDigits(req.user?.phone);
-    if (!isAdmin && !isOwnerByPhone) {
+    if (!canAccessOrder(req, order)) {
       return res.status(403).json({ message: 'Forbidden' });
     }
     if (order.paymentStatus === 'paid') return res.status(409).json({ message: 'Order already paid' });

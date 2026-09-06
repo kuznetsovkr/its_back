@@ -7,8 +7,11 @@ const requireAdmin = (req, res, next) => {
     if (!authHeader) return res.status(401).json({ message: "Требуется авторизация" });
 
     try {
-        const token = authHeader.replace("Bearer ", "").trim();
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const match = authHeader.match(/^Bearer\s+(.+)$/i);
+        if (!match) {
+            return res.status(401).json({ message: "Некорректный формат авторизации" });
+        }
+        const decoded = jwt.verify(match[1], process.env.JWT_SECRET, { algorithms: ["HS256"] });
 
         const adminPhone = normalizePhone(process.env.ADMIN_PHONE);
         const tokenPhone = normalizePhone(decoded.phone);
