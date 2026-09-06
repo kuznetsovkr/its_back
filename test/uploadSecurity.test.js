@@ -94,6 +94,13 @@ test("production order requests require the configured browser origin", async (t
     (await fetch(url, { method: "POST", headers: { Origin: "https://shop.example" } })).status,
     200
   );
+  assert.equal(
+    (await fetch(url, {
+      method: "POST",
+      headers: { Referer: "https://shop.example/checkout" },
+    })).status,
+    200
+  );
 });
 
 test("sanitizes an original file name before storing it as metadata", () => {

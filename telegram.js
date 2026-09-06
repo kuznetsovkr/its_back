@@ -191,4 +191,20 @@ const sendOrderToTelegram = async (order, attachments = []) => {
   }
 };
 
+const sendOrderIssueToTelegram = async (order, issue) => {
+  const recipients = await getTelegramRecipients(CHANNEL);
+  const message =
+    `🚨 *Заказ #${order.id} требует внимания*\n` +
+    `${md(issue)}\n` +
+    `👤 ${md(fullName(order)) || "Имя не указано"}\n` +
+    `📞 ${md(formatPhone(order.phone))}`;
+
+  let delivered = 0;
+  for (const chatId of recipients) {
+    if (await sendText(chatId, message)) delivered += 1;
+  }
+  return delivered;
+};
+
 module.exports = sendOrderToTelegram;
+module.exports.sendOrderIssueToTelegram = sendOrderIssueToTelegram;

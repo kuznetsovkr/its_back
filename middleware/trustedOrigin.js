@@ -16,7 +16,8 @@ const requireTrustedOrigin = (req, res, next) => {
     .map((value) => normalizeOrigin(value.trim()))
     .filter(Boolean);
 
-  const requestOrigin = normalizeOrigin(req.header("Origin"));
+  const requestOrigin =
+    normalizeOrigin(req.header("Origin")) || normalizeOrigin(req.header("Referer"));
   if (!requestOrigin || !configuredOrigins.includes(requestOrigin)) {
     return res.status(403).json({ message: "Источник запроса не разрешён" });
   }

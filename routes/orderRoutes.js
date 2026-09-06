@@ -1,8 +1,12 @@
 const express = require("express");
+const sequelize = require("../db");
 const Order = require("../models/Order");
-const axios = require("axios");
 const requireAdmin = require("../middleware/requireAdmin");
-const { orderCreateRateLimit } = require("../middleware/rateLimit");
+const {
+  orderCreateRateLimit,
+  orderMutationRateLimit,
+  orderReadRateLimit,
+} = require("../middleware/rateLimit");
 const requireTrustedOrigin = require("../middleware/trustedOrigin");
 const {
   canAccessOrder,
@@ -15,8 +19,19 @@ const router = express.Router();
 const fs = require("fs");
 const path = require("path");
 const OrderAttachment = require("../models/OrderAttachment");
+const OrderShipment = require("../models/OrderShipment");
 const { findInventoryForOrder } = require("../services/inventoryResolver");
 const { finalizePaidOrder } = require("../services/orderFinalizer");
+const { checkItemAndNotify } = require("../services/lowStockMonitor");
+const {
+  ReservationError,
+  createOrderWithReservation,
+  releaseReservationForOrder,
+} = require("../services/inventoryReservations");
+const {
+  RequestValidationError,
+  validateOrderCreateInput,
+} = require("../lib/requestValidation");
 const {
   PricingError,
   calculateCdekDelivery,
@@ -35,105 +50,41 @@ const {
   validateUploadedImages,
 } = require("../lib/uploadSecurity");
 
-const CDEK_SERVICE_TOKEN = process.env.CDEK_SERVICE_TOKEN || process.env.JWT_SECRET || "";
-
-const normalizeCustomerPhone = (value) => {
-  let digits = String(value || "").replace(/\D/g, "");
-  if (digits.length === 10) digits = `7${digits}`;
-  if (digits.length === 11 && digits.startsWith("8")) digits = `7${digits.slice(1)}`;
-  return /^7\d{10}$/.test(digits) ? `+${digits}` : null;
-};
-
 // ✅ Создание заказа
 router.post(
   "/create",
   requireTrustedOrigin,
   requireOrderAccessConfigured,
   orderCreateRateLimit,
+  (req, res, next) => req.is("multipart/form-data")
+    ? next()
+    : res.status(415).json({ message: "Content-Type должен быть multipart/form-data" }),
   orderImagesUpload,
   validateUploadedImages,
   cleanupTemporaryFilesAfterResponse,
   async (req, res) => {
   try {
-    // Поля формы (multer кладёт строки в req.body)
-    const body = req.body || {};
-    const safe = (v) => (v == null ? "" : String(v));
-    const toNumberOrNull = (v) => {
-      const n = Number(v);
-      return Number.isFinite(n) ? n : null;
-    };
-
-    const firstName        = safe(body.firstName);
-    const lastName         = safe(body.lastName);
-    const middleName       = safe(body.middleName);
-    const phone            = normalizeCustomerPhone(body.phone);
-    const productType      = safe(body.productType);
-    const color            = safe(body.color);
-    const size             = safe(body.size);
-    const embroideryType   = safe(body.embroideryType);
-    let embroideryTypeRu   = safe(body.embroideryTypeRu);
-    const patronusCount    = toNumberOrNull(body.patronusCount);
-    const petFaceCount     = toNumberOrNull(body.petFaceCount);
-    const customText       = safe(body.customText);
-    const customOptionRaw  = body.customOption;
-    const parseJson = (val) => {
-      if (!val) return null;
-      if (typeof val === "string") {
-        try {
-          return JSON.parse(val);
-        } catch (_) {
-          return null;
-        }
-      }
-      if (typeof val === "object") return val;
-      return null;
-    };
-    const customOption     = parseJson(customOptionRaw) || {};
-    const comment          = safe(body.comment);
-    const deliveryAddressRaw = safe(body.deliveryAddress);
-    const cdekMode         = safe(body.cdekMode);
-    const parsedCdekAddr   = parseJson(body.cdekAddress) || {};
-    const cdekPvzCode      = safe(parsedCdekAddr.code || body.cdekPvzCode || body.cdekCode || parsedCdekAddr.office_code);
-
-    const isCustomEmbroidery = ["custom", "other", "другая", "другое"].includes(
-      (embroideryType || "").trim().toLowerCase()
-    );
-
-    if (!phone) {
-      return res.status(400).json({ message: "Введите корректный номер телефона" });
-    }
-
-    if (String(body.privacyConsent).toLowerCase() !== "true") {
-      return res.status(400).json({ message: "Необходимо согласие на обработку персональных данных" });
-    }
-
-    if ((embroideryType || "").trim().toLowerCase() === "petface" && (req.files || []).length > 5) {
-      return res.status(400).json({ message: "Для портрета питомца можно загрузить не более 5 изображений" });
-    }
-
-    // Оформление адреса с пометкой СДЭК + режим
-    const modeLabel = cdekMode === "door" ? "до двери" : cdekMode === "office" ? "до ПВЗ" : "";
-    const deliveryAddressForStore = cdekMode
-      ? ["СДЭК", cdekPvzCode, deliveryAddressRaw, modeLabel].filter(Boolean).join(", ")
-      : deliveryAddressRaw;
-
-    // Читаем уточнение по кастомной вышивке
-    if (isCustomEmbroidery && !embroideryTypeRu) {
-      const isCustomText  = !!customOption.text;
-      const isCustomImage = !!customOption.image;
-      if (isCustomText && !isCustomImage) {
-        embroideryTypeRu = "Своя вышивка — надпись";
-      } else if (isCustomImage && !isCustomText) {
-        embroideryTypeRu = "Своя вышивка — изображение";
-      } else {
-        embroideryTypeRu = "Своя вышивка";
-      }
-    }
-
-    // 4) Мини-валидация, чтобы не ловить notNull на модели
-    if (!firstName || !lastName) {
-      return res.status(400).json({ message: "Введите фамилию и имя" });
-    }
+    const validated = validateOrderCreateInput(req.body || {}, req.files || []);
+    const {
+      firstName,
+      lastName,
+      middleName,
+      phone,
+      recipientPhone,
+      recipientFullName,
+      productType,
+      color,
+      size,
+      embroideryType,
+      embroideryTypeRu,
+      patronusCount,
+      petFaceCount,
+      customText,
+      comment,
+      deliveryAddress,
+      cdekMode,
+      cdekAddress,
+    } = validated;
 
     // 5) Проверяем наличие на складе
     const inv = await findInventoryForOrder(productType, color, size);
@@ -141,11 +92,6 @@ router.post(
       console.error("[CREATE] inventory NOT FOUND for:", productType, color, size);
       return res.status(400).json({ message: "Комбинация товара на складе не найдена" });
     }
-    if (inv.quantity < 1) {
-      console.error("[CREATE] not enough stock id=", inv.id, "qty=", inv.quantity);
-      return res.status(409).json({ message: "Недостаточно товара на складе" });
-    }
-
     const merchandiseQuote = calculateMerchandisePrice({
       inventory: inv,
       embroideryType,
@@ -158,7 +104,7 @@ router.post(
       : await calculateCdekDelivery({
           inventory: inv,
           cdekMode,
-          cdekAddress: parsedCdekAddr,
+          cdekAddress,
         });
     const totalPrice = isManualFlow
       ? null
@@ -170,30 +116,42 @@ router.post(
           cdekQuote.office.location?.address,
           "до ПВЗ",
         ].filter(Boolean).join(", ")
-      : deliveryAddressForStore;
+      : deliveryAddress;
 
-    // 6) Создаём заказ
-    const order = await Order.create({
-      phone,
-      firstName,
-      lastName,
-      middleName,
-      productType: inv.productType,
-      color: inv.color,
-      size: inv.size,
-      embroideryType,
-      embroideryTypeRu,
-      patronusCount,
-      petFaceCount,
-      customText,
-      comment,
-      orderDate: new Date(),
-      status: isManualFlow ? "Ожидает расчёта" : "Ожидание оплаты",
-      paymentStatus: isManualFlow ? "manual" : "pending",
-      paymentProvider: isManualFlow ? "manual" : null,
-      totalPrice,
-      deliveryAddress: canonicalDeliveryAddress,
+    // Создание заказа и резервирование единицы выполняются атомарно.
+    const { order, reservation } = await createOrderWithReservation({
       inventoryId: inv.id,
+      orderValues: {
+        phone,
+        firstName,
+        lastName,
+        middleName,
+        productType: inv.productType,
+        color: inv.color,
+        size: inv.size,
+        embroideryType,
+        embroideryTypeRu,
+        patronusCount,
+        petFaceCount,
+        customText,
+        comment,
+        orderDate: new Date(),
+        status: isManualFlow ? "Ожидает расчёта" : "Ожидание оплаты",
+        paymentStatus: isManualFlow ? "manual" : "pending",
+        paymentProvider: isManualFlow ? "manual" : null,
+        totalPrice,
+        deliveryAddress: canonicalDeliveryAddress,
+      },
+      shipmentValues: cdekQuote
+        ? {
+            provider: "cdek",
+            tariffCode: cdekQuote.tariffCode,
+            deliveryPoint: cdekQuote.office.code,
+            recipientName: recipientFullName,
+            recipientPhone,
+            declaredValue: merchandiseQuote.merchandisePrice,
+          }
+        : null,
     });
 
     // 📎 Сохранить прикреплённые файлы как вложения заказа
@@ -228,45 +186,69 @@ router.post(
         )
       );
       console.error("⚠️ Не удалось сохранить вложения заказа:", e);
-      // Не роняем оформление — вложения опциональны.
-    }
-
-    let cdekResult = null;
-    if (cdekQuote) {
       try {
-        cdekResult = await sendOrderToCdek({
-          order,
-          body: req.body,
-          merchandisePrice: merchandiseQuote.merchandisePrice,
-          cdekQuote,
-          phone,
-          nameParts: { firstName, lastName, middleName },
+        await sequelize.transaction(async (transaction) => {
+          const failedOrder = await Order.findByPk(order.id, {
+            transaction,
+            lock: transaction.LOCK.UPDATE,
+          });
+          await releaseReservationForOrder(order.id, "attachment_failure", transaction);
+          if (failedOrder) {
+            failedOrder.status = "Ошибка сохранения вложений";
+            failedOrder.paymentStatus = "cancelled";
+            await failedOrder.save({ transaction });
+          }
         });
-      } catch (e) {
-        console.error("[CREATE] CDEK create_order failed:", e?.response?.data || e.message || e);
+      } catch (rollbackError) {
+        console.error("Не удалось освободить резерв после ошибки вложений:", rollbackError);
       }
+      throw e;
     }
-
 
     res.json({
       message: "Заказ успешно оформлен",
       orderId: order.id,
       orderToken: createOrderAccessToken(order.id),
-      cdekNumber: cdekResult?.cdekNumber || null,
+      cdekNumber: null,
       pricePending: isManualFlow,
+      reservationExpiresAt: reservation.expiresAt,
+    });
+    checkItemAndNotify(inv.id).catch((error) => {
+      console.error("Low-stock notify error after reservation:", error);
     });
   } catch (error) {
-    if (error instanceof PricingError) {
-      return res.status(error.statusCode).json({ message: error.message, code: error.code });
+    if (
+      error instanceof PricingError ||
+      error instanceof ReservationError ||
+      error instanceof RequestValidationError
+    ) {
+      return res.status(error.statusCode).json({
+        message: error.message,
+        code: error.code,
+        field: error.field || undefined,
+      });
     }
     console.error("❌ Ошибка оформления заказа:", error);
-    res.status(500).json({ message: "Ошибка оформления заказа", error: error.message });
+    res.status(500).json({ message: "Ошибка оформления заказа" });
   }
   }
 );
-router.put("/update-status/:orderId", requireAdmin, async (req, res) => {
+router.put("/update-status/:orderId", requireAdmin, orderMutationRateLimit, async (req, res) => {
     try {
-        const { orderId } = req.params;
+        const orderId = Number(req.params.orderId);
+
+        if (!Number.isInteger(orderId) || orderId < 1) {
+            return res.status(400).json({ message: "Некорректный номер заказа" });
+        }
+        if (!req.is("application/json")) {
+            return res.status(415).json({ message: "Content-Type должен быть application/json" });
+        }
+        if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
+            return res.status(400).json({ message: "Некорректное тело запроса" });
+        }
+        if (Object.keys(req.body).some((key) => key !== "status")) {
+            return res.status(400).json({ message: "Запрос содержит неизвестные поля" });
+        }
         const { status } = req.body;
 
         const validStatuses = [
@@ -283,15 +265,39 @@ router.put("/update-status/:orderId", requireAdmin, async (req, res) => {
             return res.status(400).json({ message: "Некорректный статус" });
         }
 
-        const order = await Order.findByPk(orderId);
-        if (!order) {
+        const updateResult = await sequelize.transaction(async (transaction) => {
+            const lockedOrder = await Order.findByPk(orderId, {
+                transaction,
+                lock: transaction.LOCK.UPDATE,
+            });
+            if (!lockedOrder) return null;
+
+            let releasedInventoryId = null;
+            if (status === "Отменен") {
+                const releasedInventory = await releaseReservationForOrder(
+                    orderId,
+                    "cancelled",
+                    transaction
+                );
+                releasedInventoryId = releasedInventory?.id || null;
+                if (lockedOrder.paymentStatus === "pending") {
+                    lockedOrder.paymentStatus = "cancelled";
+                }
+            }
+            lockedOrder.status = status;
+            await lockedOrder.save({ transaction });
+            return { order: lockedOrder, releasedInventoryId };
+        });
+        if (!updateResult) {
             return res.status(404).json({ message: "Заказ не найден" });
         }
+        if (updateResult.releasedInventoryId) {
+            checkItemAndNotify(updateResult.releasedInventoryId).catch((error) => {
+                console.error("Low-stock notify error after cancellation:", error);
+            });
+        }
 
-        order.status = status;
-        await order.save();
-
-        res.json({ message: "Статус заказа обновлен", order });
+        res.json({ message: "Статус заказа обновлен", order: updateResult.order });
     } catch (error) {
         console.error("Ошибка обновления статуса:", error);
         res.status(500).json({ message: "Ошибка сервера при обновлении статуса" });
@@ -299,9 +305,12 @@ router.put("/update-status/:orderId", requireAdmin, async (req, res) => {
 });
 
 // 🔍 Проверка статуса заказа по номеру
-router.get("/status/:orderId", requireOrderAccess, async (req, res) => {
+router.get("/status/:orderId", requireOrderAccess, orderReadRateLimit, async (req, res) => {
     try {
-        const { orderId } = req.params;
+        const orderId = Number(req.params.orderId);
+        if (!Number.isInteger(orderId) || orderId < 1) {
+            return res.status(400).json({ message: "Некорректный номер заказа" });
+        }
         const order = await Order.findByPk(orderId);
 
         if (!order) {
@@ -312,17 +321,46 @@ router.get("/status/:orderId", requireOrderAccess, async (req, res) => {
             return res.status(403).json({ message: "Нет доступа к заказу" });
         }
 
-        res.json({ status: order.status });
+        const shipment = await OrderShipment.findOne({
+            where: { orderId },
+            attributes: ["status", "cdekNumber"],
+            raw: true,
+        });
+        res.json({
+            status: order.status,
+            shipmentStatus: shipment?.status || null,
+            cdekNumber: shipment?.cdekNumber || null,
+        });
     } catch (error) {
         console.error("Ошибка получения статуса заказа:", error);
         res.status(500).json({ message: "Ошибка сервера" });
     }
 });
 
-router.get("/all", requireAdmin, async (_req, res) => {
+router.get("/all", requireAdmin, orderReadRateLimit, async (_req, res) => {
     try {
         const orders = await Order.findAll({ order: [["orderDate", "DESC"]] });
-        res.json(orders);
+        const shipments = orders.length
+            ? await OrderShipment.findAll({
+                where: { orderId: orders.map((order) => order.id) },
+                attributes: [
+                    "orderId",
+                    "provider",
+                    "status",
+                    "cdekNumber",
+                    "attempts",
+                    "lastError",
+                ],
+                raw: true,
+            })
+            : [];
+        const shipmentByOrderId = new Map(
+            shipments.map((shipment) => [Number(shipment.orderId), shipment])
+        );
+        res.json(orders.map((order) => ({
+            ...order.get({ plain: true }),
+            shipment: shipmentByOrderId.get(Number(order.id)) || null,
+        })));
     } catch (error) {
         console.error("Ошибка при получении всех заказов:", error);
         res.status(500).json({ message: "Ошибка сервера" });
@@ -330,12 +368,26 @@ router.get("/all", requireAdmin, async (_req, res) => {
 });
 
 // POST /api/orders/confirm/:orderId
-router.post("/confirm/:orderId", requireOrderAccess, async (req, res) => {
-  const { orderId } = req.params;
+router.post("/confirm/:orderId", requireOrderAccess, orderMutationRateLimit, async (req, res) => {
+  const orderId = Number(req.params.orderId);
   const { provider = "manual" } = req.body || {};
   const allowedProviders = new Set(["manual", "fallback"]);
 
   try {
+    if (!Number.isInteger(orderId) || orderId < 1) {
+      return res.status(400).json({ message: "Некорректный номер заказа" });
+    }
+    if (!req.is("application/json")) {
+      return res.status(415).json({ message: "Content-Type должен быть application/json" });
+    }
+    if (
+      !req.body ||
+      typeof req.body !== "object" ||
+      Array.isArray(req.body) ||
+      Object.keys(req.body).some((key) => key !== "provider")
+    ) {
+      return res.status(400).json({ message: "Некорректное тело запроса" });
+    }
     if (!allowedProviders.has(provider)) {
       return res.status(403).json({ message: "Unsupported confirmation provider" });
     }
@@ -376,7 +428,7 @@ router.post("/confirm/:orderId", requireOrderAccess, async (req, res) => {
   }
 });
 
-router.get("/:orderId/attachments", requireOrderAccess, async (req, res) => {
+router.get("/:orderId/attachments", requireOrderAccess, orderReadRateLimit, async (req, res) => {
   const orderId = Number(req.params.orderId);
   if (!Number.isInteger(orderId) || orderId < 1) {
     return res.status(400).json({ message: "Некорректный номер заказа" });
@@ -410,7 +462,7 @@ router.get("/:orderId/attachments", requireOrderAccess, async (req, res) => {
   }
 });
 
-router.get("/:orderId/attachments/:attachmentId", requireOrderAccess, async (req, res, next) => {
+router.get("/:orderId/attachments/:attachmentId", requireOrderAccess, orderReadRateLimit, async (req, res, next) => {
   const orderId = Number(req.params.orderId);
   const attachmentId = Number(req.params.attachmentId);
   if (
@@ -458,13 +510,18 @@ router.get("/:orderId/attachments/:attachmentId", requireOrderAccess, async (req
 });
 
 // 👉 ДОЛЖЕН быть в самом конце файла, перед module.exports
-router.get('/:id', requireOrderAccess, async (req, res) => {
+router.get('/:id', requireOrderAccess, orderReadRateLimit, async (req, res) => {
   const id = Number(req.params.id);
-  if (!Number.isFinite(id)) return res.status(400).json({ message: 'Bad id' });
+  if (!Number.isInteger(id) || id < 1) return res.status(400).json({ message: 'Bad id' });
 
   const order = await Order.findByPk(id);
   if (!order) return res.status(404).json({ message: 'Order not found' });
   if (!canAccessOrder(req, order)) return res.status(403).json({ message: 'Forbidden' });
+  const shipment = await OrderShipment.findOne({
+    where: { orderId: id },
+    attributes: ["status", "cdekNumber"],
+    raw: true,
+  });
 
   // Отдаём только то, что нужно фронту
   res.json({
@@ -477,74 +534,13 @@ router.get('/:id', requireOrderAccess, async (req, res) => {
     pricePending: order.paymentStatus === "manual" || order.paymentProvider === "manual" || order.totalPrice == null,
     paykeeperInvoiceId: order.paykeeperInvoiceId,
     paykeeperPaymentId: order.paykeeperPaymentId,
+    shipmentStatus: shipment?.status || null,
+    cdekNumber: shipment?.cdekNumber || null,
   });
 });
 
 
 
-
-async function sendOrderToCdek({ order, body, merchandisePrice, cdekQuote, phone, nameParts }) {
-  const serviceUrl =
-    process.env.CDEK_SERVICE_URL ||
-    (process.env.PUBLIC_APP_URL ? `${process.env.PUBLIC_APP_URL}/service.php` : "http://localhost:5000/service.php");
-
-  if (!serviceUrl) {
-    console.warn("[CDEK] CDEK_SERVICE_URL/PUBLIC_APP_URL not configured, skipping create_order");
-    return;
-  }
-
-  const officeAddress = cdekQuote.office.location?.address || "";
-  const packagePreset = cdekQuote.packages[0];
-
-  const payload = {
-    action: "create_order", // дублируем в body на случай, если query потеряется
-    number: order.id,
-    cdekMode: "office",
-    cdekTariffCode: cdekQuote.tariffCode,
-    cdekTariff: cdekQuote.tariff,
-    cdekAddress: cdekQuote.office,
-    cdekAddressLabel: officeAddress,
-    cdekGoods: [{
-      name: order.productType,
-      ware_key: `ORDER-${order.id}`,
-      width: packagePreset.width,
-      height: packagePreset.height,
-      length: packagePreset.length,
-      weight_grams: packagePreset.weight,
-    }],
-    cdekFrom: cdekQuote.from,
-    recipientFullName:
-      body.recipientFullName ||
-      [nameParts.lastName, nameParts.firstName, nameParts.middleName].filter(Boolean).join(" "),
-    recipientPhoneDigits: body.recipientPhoneDigits || phone,
-    totalPrice: merchandisePrice,
-    deliveryPayment: { payer: "sender", paidByUserOnSite: true },
-    deliveryAddress: officeAddress,
-    comment: body.comment,
-  };
-
-  try {
-    const resp = await axios.post(`${serviceUrl}?action=create_order`, payload, {
-      headers: {
-        "Content-Type": "application/json",
-        "X-CDEK-Service-Token": CDEK_SERVICE_TOKEN,
-      },
-      timeout: 10000,
-    });
-    const data = resp?.data || {};
-    const entity = data?.entity || {};
-    const cdekNumber = entity?.cdek_number || entity?.cdekNumber || null;
-    return { cdekNumber, data };
-  } catch (e) {
-    const resp = e.response;
-    console.error("[CDEK] create_order error", {
-      status: resp?.status,
-      data: resp?.data,
-      url: resp?.config?.url,
-    });
-    throw e;
-  }
-}
 
 router.use(uploadErrorHandler);
 

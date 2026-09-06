@@ -1,112 +1,121 @@
 const sequelize = require("../db");
 const Order = require("../models/Order");
-const Inventory = require("../models/Inventory");
 const PaymentEvent = require("../models/PaymentEvent");
-const { checkItemAndNotify } = require("../services/lowStockMonitor");
-const sendOrderToTelegram = require("../telegram");
 const OrderAttachment = require("../models/OrderAttachment");
+const { checkItemAndNotify } = require("./lowStockMonitor");
+const { commitReservationForOrder } = require("./inventoryReservations");
+const {
+  createCdekShipmentForOrder,
+  markCdekShipmentReady,
+} = require("./cdekShipments");
+const sendOrderToTelegram = require("../telegram");
 
-async function finalizePaidOrder({ orderId, provider = "manual", eventId, overrides = {} }) {
-  if (!orderId) throw new Error("orderId is required");
-  if (!eventId) eventId = `${provider}-${orderId}`;
+const finalizePaidOrder = async ({
+  orderId,
+  provider = "manual",
+  eventId,
+  overrides = {},
+  paymentConfirmed = false,
+}) => {
+  const parsedOrderId = Number(orderId);
+  if (!Number.isInteger(parsedOrderId) || parsedOrderId < 1) {
+    throw new Error("orderId is required");
+  }
+  const normalizedEventId = String(eventId || `${provider}-${parsedOrderId}`).slice(0, 255);
 
-  const t = await sequelize.transaction();
-  try {
-    // 1) Идемпотентность
-    const [, created] = await PaymentEvent.findOrCreate({
-      where: { eventId },
-      defaults: { provider, orderId, payload: overrides || {} },
-      transaction: t,
+  const result = await sequelize.transaction(async (transaction) => {
+    const order = await Order.findByPk(parsedOrderId, {
+      transaction,
+      lock: transaction.LOCK.UPDATE,
     });
-
-    // 2) Лочим заказ
-    const order = await Order.findByPk(orderId, { transaction: t, lock: t.LOCK.UPDATE });
-    if (!order) {
-      await t.rollback();
-      return { ok: false, message: "Заказ не найден" };
-    }
+    if (!order) return { ok: false, message: "Заказ не найден" };
 
     const isManualFlow =
       provider === "manual" ||
       order.paymentProvider === "manual" ||
       order.paymentStatus === "manual";
 
-    // Если уже финализирован - просто выходим, НИЧЕГО не шлём повторно
-    if (!created || order.status === "Оплачено") {
-      await t.commit();
-      return { ok: true, alreadyProcessed: true, order };
+    if (order.status === "Отменен" && !paymentConfirmed) {
+      return { ok: false, message: "Заказ отменён" };
     }
-
-    // Без подтверждённой оплаты финализацию не проводим (кроме ручных сценариев)
-    if (!isManualFlow && order.paymentStatus !== "paid") {
-      await t.rollback();
+    if (!paymentConfirmed && !isManualFlow && order.paymentStatus !== "paid") {
       return { ok: false, message: "Оплата ещё не подтверждена" };
     }
 
-    const overridePrice = overrides.totalPrice;
-    const parsedOverridePrice =
-      overridePrice !== undefined ? Number(overridePrice) : undefined;
-    const hasNumericOverridePrice = Number.isFinite(parsedOverridePrice);
+    const [, created] = await PaymentEvent.findOrCreate({
+      where: { eventId: normalizedEventId },
+      defaults: {
+        provider,
+        orderId: parsedOrderId,
+        payload: overrides || {},
+      },
+      transaction,
+    });
+    const alreadyProcessed =
+      !created || (!isManualFlow && order.status === "Оплачено");
 
-    // 3) Списываем со склада
-    let item;
-    if (order.inventoryId) {
-      item = await Inventory.findByPk(order.inventoryId, { transaction: t, lock: t.LOCK.UPDATE });
-    } else {
-      const { findInventoryForOrder } = require("./inventoryResolver");
-      item = await findInventoryForOrder(order.productType, order.color, order.size);
-      if (item) {
-        order.inventoryId = item.id;
-        await order.save({ transaction: t });
+    if (alreadyProcessed) {
+      if (order.paymentStatus === "paid") {
+        await markCdekShipmentReady(order.id, transaction);
       }
+      return { ok: true, alreadyProcessed: true, order, inventory: null };
     }
 
-    if (!item || item.quantity < 1) {
-      throw new Error("Недостаточно товара на складе");
+    if (paymentConfirmed) {
+      order.paymentStatus = "paid";
+      order.paymentProvider = provider;
+      order.paykeeperPaymentId = overrides.paymentId || order.paykeeperPaymentId;
+      order.paidAt = order.paidAt || new Date();
     }
 
-    item.quantity = Math.max(0, item.quantity - 1);
-    await item.save({ transaction: t });
+    const inventory = await commitReservationForOrder({ order, transaction });
+    const overridePrice = Number(overrides.totalPrice);
+    const hasNumericOverridePrice =
+      overrides.totalPrice !== undefined && Number.isFinite(overridePrice) && overridePrice >= 0;
 
-    // 4) Обновляем заказ
     if (isManualFlow) {
       order.status = "Ожидает расчёта";
       order.paymentStatus = order.paymentStatus === "paid" ? "paid" : "manual";
       order.paymentProvider = order.paymentProvider || provider;
-      if (hasNumericOverridePrice) order.totalPrice = parsedOverridePrice;
-      if (overrides.deliveryAddress) order.deliveryAddress = overrides.deliveryAddress;
     } else {
       order.status = "Оплачено";
       order.paidAt = order.paidAt || new Date();
-      if (hasNumericOverridePrice) order.totalPrice = parsedOverridePrice;
-      if (overrides.deliveryAddress) order.deliveryAddress = overrides.deliveryAddress;
+      await markCdekShipmentReady(order.id, transaction);
     }
-    await order.save({ transaction: t });
+    if (hasNumericOverridePrice) order.totalPrice = overridePrice;
+    if (overrides.deliveryAddress) order.deliveryAddress = overrides.deliveryAddress;
+    await order.save({ transaction });
 
-    // Коммитим транзакцию
-    await t.commit();
+    return { ok: true, alreadyProcessed: false, order, inventory };
+  });
 
-    // 5) Пост-коммит: low-stock
+  if (!result.ok) return result;
+
+  if (!result.alreadyProcessed) {
     try {
-      await checkItemAndNotify(item.id);
-    } catch (e) {
-      console.error("Low-stock notify error:", e);
+      await checkItemAndNotify(result.inventory.id);
+    } catch (error) {
+      console.error("Low-stock notify error:", error);
     }
 
-    // 6) Пост-коммит: ОДНА отправка в Телеграм с вложениями
     try {
-      const files = await OrderAttachment.findAll({ where: { orderId }, raw: true });
-      await sendOrderToTelegram(order.toJSON(), files);
-    } catch (e) {
-      console.error("Telegram send error:", e);
+      const files = await OrderAttachment.findAll({ where: { orderId: parsedOrderId }, raw: true });
+      await sendOrderToTelegram(result.order.toJSON(), files);
+    } catch (error) {
+      console.error("Telegram send error:", error);
     }
-
-    return { ok: true, order };
-  } catch (e) {
-    await t.rollback();
-    console.error("❗ finalizePaidOrder error:", e);
-    throw e;
   }
-}
+
+  if (result.order.paymentStatus === "paid") {
+    try {
+      result.shipment = await createCdekShipmentForOrder(parsedOrderId);
+    } catch (error) {
+      // Оплата и резерв уже подтверждены. Повтор выполнит фоновая задача.
+      console.error(`[CDEK] Shipment creation failed for paid order ${parsedOrderId}:`, error.message);
+    }
+  }
+
+  return result;
+};
 
 module.exports = { finalizePaidOrder };

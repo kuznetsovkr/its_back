@@ -6,7 +6,6 @@ const path = require("path");
 const cron = require("node-cron");
 
 const sequelize = require("./db");
-const cdekRoutes = require("./routes/cdekRoutes");
 const cdekServiceRoutes = require("./routes/cdekServiceRoutes");
 const authRoutes = require("./routes/authRoutes");
 const orderRoutes = require("./routes/orderRoutes");
@@ -16,7 +15,9 @@ const pricingRoutes = require("./routes/pricingRoutes");
 const uploadRoutes = require("./routes/uploadRoutes");
 const fileRoutes = require("./routes/fileRoutes");
 const colorsRouter = require("./routes/colors");
-const { checkAllAndNotify } = require("./services/lowStockMonitor");
+const { checkAllAndNotify, checkItemAndNotify } = require("./services/lowStockMonitor");
+const { releaseExpiredReservations } = require("./services/inventoryReservations");
+const { retryPendingCdekShipments } = require("./services/cdekShipments");
 const { clearTemporaryUploads } = require("./lib/uploadSecurity");
 const {
   TELEGRAM_CHANNELS,
@@ -26,8 +27,12 @@ const {
 
 require("./models/TelegramChannelSubscriber");
 require("./models/OrderAttachment");
+require("./models/InventoryReservation");
+require("./models/OrderShipment");
 
 const ENABLE_LOW_STOCK_CRON = process.env.ENABLE_LOW_STOCK_CRON === "1";
+const ENABLE_RESERVATION_CRON = process.env.ENABLE_RESERVATION_CRON !== "0";
+const ENABLE_CDEK_RETRY_CRON = process.env.ENABLE_CDEK_RETRY_CRON !== "0";
 const ENABLE_DB_ALTER_SYNC = process.env.ENABLE_DB_ALTER_SYNC === "1";
 const ENABLE_STARTUP_WARNINGS = process.env.ENABLE_STARTUP_WARNINGS === "1";
 
@@ -52,11 +57,10 @@ const FRONTEND_BUILD_DIR =
 const FRONTEND_INDEX_FILE = path.join(FRONTEND_BUILD_DIR, "index.html");
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "64kb", strict: true }));
 
 app.use("/api/auth", authRoutes);
 app.use("/api/orders", orderRoutes);
-app.use("/api/cdek", cdekRoutes);
 app.use("/api/inventory", inventoryRoutes);
 app.use("/api/clothing-types", clothingTypeRoutes);
 app.use("/api/pricing", pricingRoutes);
@@ -112,6 +116,53 @@ const start = async () => {
           await checkAllAndNotify();
         } catch (e) {
           console.error("Low-stock cron error:", e);
+        }
+      });
+    }
+
+    if (ENABLE_RESERVATION_CRON) {
+      let reservationCleanupRunning = false;
+      const releaseReservations = async () => {
+        if (reservationCleanupRunning) return;
+        reservationCleanupRunning = true;
+        try {
+          const inventoryIds = await releaseExpiredReservations();
+          await Promise.all([...new Set(inventoryIds)].map((id) => checkItemAndNotify(id)));
+        } finally {
+          reservationCleanupRunning = false;
+        }
+      };
+      releaseReservations().catch((error) => {
+        console.error("Initial reservation cleanup error:", error);
+      });
+      cron.schedule("* * * * *", async () => {
+        try {
+          await releaseReservations();
+        } catch (error) {
+          console.error("Reservation cleanup error:", error);
+        }
+      });
+    }
+
+    if (ENABLE_CDEK_RETRY_CRON) {
+      let cdekRetryRunning = false;
+      const retryCdekShipments = async () => {
+        if (cdekRetryRunning) return;
+        cdekRetryRunning = true;
+        try {
+          await retryPendingCdekShipments();
+        } finally {
+          cdekRetryRunning = false;
+        }
+      };
+      retryCdekShipments().catch((error) => {
+        console.error("Initial CDEK shipment retry error:", error);
+      });
+      cron.schedule("*/5 * * * *", async () => {
+        try {
+          await retryCdekShipments();
+        } catch (error) {
+          console.error("CDEK shipment retry error:", error);
         }
       });
     }

@@ -81,14 +81,15 @@ const verifyOrderAccessToken = (token) => {
 const readAdminAccess = (req) => {
   const authHeader = String(req.header("Authorization") || "");
   const match = authHeader.match(/^Bearer\s+(.+)$/i);
-  if (!match || !process.env.JWT_SECRET) return null;
+  const jwtSecret = process.env.JWT_SECRET;
+  if (!match || !jwtSecret || Buffer.byteLength(jwtSecret) < 32) return null;
 
-  const decoded = jwt.verify(match[1], process.env.JWT_SECRET, { algorithms: ["HS256"] });
+  const decoded = jwt.verify(match[1], jwtSecret, { algorithms: ["HS256"] });
   if (decoded?.role !== "admin") return null;
 
   const configuredPhone = String(process.env.ADMIN_PHONE || "").replace(/\D/g, "");
   const tokenPhone = String(decoded.phone || "").replace(/\D/g, "");
-  if (configuredPhone && configuredPhone !== tokenPhone) return null;
+  if (!/^\d{10,11}$/.test(configuredPhone) || configuredPhone !== tokenPhone) return null;
 
   return { kind: "admin", claims: decoded };
 };
