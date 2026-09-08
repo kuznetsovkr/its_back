@@ -85,7 +85,7 @@ app.use("/payments/paykeeper", paykeeperRouter);
 if (fs.existsSync(FRONTEND_INDEX_FILE)) {
   app.use(express.static(FRONTEND_BUILD_DIR));
 
-  app.get("*", (req, res, next) => {
+  app.get(/.*/, (req, res, next) => {
     if (
       req.path.startsWith("/api/") ||
       req.path === "/api" ||
