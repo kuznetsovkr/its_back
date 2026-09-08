@@ -28,6 +28,7 @@
     "node-telegram-bot-api": "^0.66.0",
     "pg": "^8.13.1",
     "pg-hstore": "^2.3.4",
+    "redis": "^5.12.1",
     "sequelize": "^6.37.5",
     "sequelize-cli": "^6.6.2",
     "sharp": "^0.34.0"

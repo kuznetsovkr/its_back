@@ -1,3 +1,22 @@
+const { createHash } = require("node:crypto");
+const { getRateLimitStore } = require("../services/rateLimitStore");
+
+let lastStoreErrorLogAt = 0;
+
+const buildStorageKey = (keyPrefix, role, identity) => {
+  const identityHash = createHash("sha256")
+    .update(`${role}:${identity}`)
+    .digest("base64url");
+  return `${keyPrefix}:${identityHash}`;
+};
+
+const reportStoreError = (keyPrefix, error) => {
+  const now = Date.now();
+  if (now - lastStoreErrorLogAt < 10_000) return;
+  lastStoreErrorLogAt = now;
+  console.error(`[rate-limit] Store error for ${keyPrefix}:`, error.message);
+};
+
 const createRateLimiter = ({
   windowMs,
   max,
@@ -5,37 +24,39 @@ const createRateLimiter = ({
   message,
   keyGenerator,
   maxEntries = 50_000,
+  store,
 }) => {
-  const entries = new Map();
-  let lastCleanup = 0;
+  if (!Number.isInteger(windowMs) || windowMs < 1) {
+    throw new Error("Rate-limit windowMs must be a positive integer");
+  }
+  if (!keyPrefix || !/^[a-zA-Z0-9:_-]+$/.test(keyPrefix)) {
+    throw new Error("Rate-limit keyPrefix contains unsupported characters");
+  }
 
-  return (req, res, next) => {
-    const now = Date.now();
-    if (now - lastCleanup > windowMs) {
-      lastCleanup = now;
-      for (const [key, entry] of entries) {
-        if (entry.resetAt <= now) entries.delete(key);
-      }
-    }
-
+  return async (req, res, next) => {
     const identity = keyGenerator
       ? keyGenerator(req)
       : req.user?.phone || req.user?.id || req.ip || req.socket?.remoteAddress || "unknown";
-    const key = `${keyPrefix}:${req.user?.role || "anonymous"}:${identity}`;
     const requestLimit = typeof max === "function" ? max(req) : max;
-    let entry = entries.get(key);
-
-    if (!entry || entry.resetAt <= now) {
-      if (!entries.has(key) && entries.size >= maxEntries) {
-        entries.delete(entries.keys().next().value);
-      }
-      entry = { count: 0, resetAt: now + windowMs };
-      entries.set(key, entry);
+    if (!Number.isInteger(requestLimit) || requestLimit < 1) {
+      return next(new Error("Rate-limit max must resolve to a positive integer"));
     }
 
-    entry.count += 1;
-    const remaining = Math.max(0, requestLimit - entry.count);
-    const resetSeconds = Math.max(1, Math.ceil((entry.resetAt - now) / 1000));
+    const role = req.user?.role || "anonymous";
+    const key = buildStorageKey(keyPrefix, role, String(identity || "unknown"));
+    let rateLimit;
+    try {
+      rateLimit = await (store || getRateLimitStore()).consume(key, windowMs, maxEntries);
+    } catch (error) {
+      reportStoreError(keyPrefix, error);
+      res.set("Retry-After", "5");
+      return res.status(503).json({
+        message: "Сервис временно недоступен. Повторите попытку позднее",
+      });
+    }
+
+    const remaining = Math.max(0, requestLimit - rateLimit.count);
+    const resetSeconds = Math.max(1, Math.ceil(rateLimit.resetMs / 1000));
 
     res.set({
       "RateLimit-Limit": String(requestLimit),
@@ -43,7 +64,7 @@ const createRateLimiter = ({
       "RateLimit-Reset": String(resetSeconds),
     });
 
-    if (entry.count > requestLimit) {
+    if (rateLimit.count > requestLimit) {
       res.set("Retry-After", String(resetSeconds));
       return res.status(429).json({ message });
     }

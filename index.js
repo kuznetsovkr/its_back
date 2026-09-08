@@ -20,6 +20,10 @@ const { retryPendingCdekShipments } = require("./services/cdekShipments");
 const { clearTemporaryUploads } = require("./lib/uploadSecurity");
 const { createCorsMiddleware, handleCorsError } = require("./middleware/corsPolicy");
 const {
+  closeRateLimitStore,
+  initializeRateLimitStore,
+} = require("./services/rateLimitStore");
+const {
   TELEGRAM_CHANNELS,
   getTelegramChannelConfig,
   validateTelegramChannelConfig,
@@ -101,6 +105,8 @@ if (fs.existsSync(FRONTEND_INDEX_FILE)) {
 
 const start = async () => {
   try {
+    const rateLimitStore = await initializeRateLimitStore();
+    console.log(`[startup] Rate-limit store: ${rateLimitStore.mode}`);
     await clearTemporaryUploads();
     await sequelize.authenticate();
     if (ENABLE_DB_ALTER_SYNC) {
@@ -178,7 +184,9 @@ const start = async () => {
       process.exit(1);
     });
   } catch (error) {
-    console.error("Database connection error:", error);
+    console.error("Server startup error:", error);
+    await closeRateLimitStore();
+    process.exitCode = 1;
   }
 };
 
