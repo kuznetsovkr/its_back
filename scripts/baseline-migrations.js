@@ -5,6 +5,7 @@ const { DataTypes, QueryTypes } = require("sequelize");
 const sequelize = require("../db");
 const {
   BASELINE_TABLE,
+  inspectMigrationBaseline,
   normalizeTableName,
 } = require("../lib/migrationSafety");
 const { getMigrationNames } = require("../services/databaseMigrations");
@@ -17,41 +18,6 @@ const loadMigration = (name) => {
   const migrationPath = path.join(MIGRATIONS_DIRECTORY, name);
   if (!fs.existsSync(migrationPath)) throw new Error(`Migration not found: ${name}`);
   return require(migrationPath);
-};
-
-const hasMatchingIndex = (indexes, expected) => indexes.some((index) => {
-  const fields = index.fields.map((field) => field.attribute || field.name);
-  return Boolean(index.unique) === Boolean(expected.unique) &&
-    fields.length === expected.fields.length &&
-    fields.every((field, position) => field === expected.fields[position]);
-});
-
-const inspectExistingMigration = async (queryInterface, name, migration, existingTables) => {
-  const baseline = migration.baseline;
-  if (!baseline?.tableName || !Array.isArray(baseline.columns)) {
-    throw new Error(`Migration ${name} does not declare baseline metadata`);
-  }
-  if (!existingTables.has(baseline.tableName)) return { state: "pending" };
-
-  const description = await queryInterface.describeTable(baseline.tableName);
-  const missingColumns = baseline.columns.filter((column) => !description[column]);
-  if (missingColumns.length > 0) {
-    throw new Error(
-      `Existing table ${baseline.tableName} is incompatible with ${name}; missing columns: ${missingColumns.join(", ")}`
-    );
-  }
-
-  const indexes = await queryInterface.showIndex(baseline.tableName);
-  const missingIndexes = (baseline.indexes || []).filter(
-    (expected) => !hasMatchingIndex(indexes, expected)
-  );
-  if (missingIndexes.length > 0) {
-    throw new Error(
-      `Existing table ${baseline.tableName} is incompatible with ${name}; required indexes are missing`
-    );
-  }
-
-  return { state: "adopt" };
 };
 
 const ensureMetadataTables = async (queryInterface, existingTables, transaction) => {
@@ -99,7 +65,7 @@ const run = async () => {
   const pending = [];
   for (const name of getMigrationNames()) {
     if (applied.has(name)) continue;
-    const result = await inspectExistingMigration(
+    const result = await inspectMigrationBaseline(
       queryInterface,
       name,
       loadMigration(name),

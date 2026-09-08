@@ -3,7 +3,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { test } = require("node:test");
 const sequelize = require("../db");
-const { assertMigrationCanRevert } = require("../lib/migrationSafety");
+const {
+  assertMigrationCanRevert,
+  inspectMigrationBaseline,
+} = require("../lib/migrationSafety");
 const {
   assertDatabaseMigrationsCurrent,
   getMigrationNames,
@@ -23,14 +26,10 @@ test("migration baseline columns match every active Sequelize model", () => {
     assert.equal(typeof migration.up, "function", `${name} must provide up()`);
     assert.equal(typeof migration.down, "function", `${name} must provide down()`);
     assert.ok(migration.baseline?.tableName, `${name} must provide baseline metadata`);
-    assert.equal(
-      migrationTables.has(migration.baseline.tableName),
-      false,
-      `duplicate migration table ${migration.baseline.tableName}`
-    );
+    const existingColumns = migrationTables.get(migration.baseline.tableName) || [];
     migrationTables.set(
       migration.baseline.tableName,
-      [...migration.baseline.columns].sort()
+      [...new Set([...existingColumns, ...migration.baseline.columns])].sort()
     );
   }
 
@@ -101,4 +100,34 @@ test("baseline-adopted migrations cannot drop pre-existing tables", async () => 
     ),
     /cannot be reverted safely/
   );
+});
+
+test("alter migrations remain pending until their columns already exist", async () => {
+  const migration = {
+    baseline: {
+      tableName: "orders",
+      mode: "alter",
+      columns: ["recipientFullName"],
+    },
+  };
+  const queryInterface = {
+    describeTable: async () => ({ id: {}, createdAt: {} }),
+    showIndex: async () => [],
+  };
+  const pending = await inspectMigrationBaseline(
+    queryInterface,
+    "alter-orders.js",
+    migration,
+    new Set(["orders"])
+  );
+  assert.equal(pending.state, "pending");
+
+  queryInterface.describeTable = async () => ({ id: {}, recipientFullName: {} });
+  const adopted = await inspectMigrationBaseline(
+    queryInterface,
+    "alter-orders.js",
+    migration,
+    new Set(["orders"])
+  );
+  assert.equal(adopted.state, "adopt");
 });

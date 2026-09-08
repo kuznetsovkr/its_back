@@ -30,6 +30,7 @@ const validOrder = () => ({
   patronusCount: "1",
   petFaceCount: "1",
   customText: "",
+  customTextFont: "",
   customOption: JSON.stringify({ image: false, text: false }),
   comment: "",
   deliveryAddress: "Красноярск, ул. Примерная, 1",
@@ -62,13 +63,21 @@ test("order validation enforces bounded counters and the selected custom mode", 
     embroideryType: "custom",
     customOption: JSON.stringify({ image: false, text: true }),
     customText: "Надпись",
+    customTextFont: "Georgia",
   };
   const validated = validateOrderCreateInput(custom, []);
   assert.equal(validated.embroideryTypeRu, "Своя вышивка — надпись");
+  assert.equal(validated.customTextFont, "Georgia");
+  assert.equal(validated.recipientFullName, "Иванов Иван");
+  assert.equal(validated.preferredContact, "telegram");
 
   assert.throws(
     () => validateOrderCreateInput({ ...custom, customOption: "{}" }, []),
     (error) => error.field === "customOption"
+  );
+  assert.throws(
+    () => validateOrderCreateInput({ ...custom, customTextFont: "Comic Sans MS" }, []),
+    (error) => error.field === "customTextFont"
   );
 });
 

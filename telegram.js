@@ -114,7 +114,7 @@ const sendOrderToTelegram = async (order, attachments = []) => {
   const comment = (order.comment || "").trim();
   const embroidery = embroideryLabel(order);
   const counts = [];
-  if (order.embroideryType === "patronus") {
+  if (String(order.embroideryType || "").toLowerCase() === "patronus") {
     const hasPatronus = Number.isFinite(order.patronusCount) && order.patronusCount > 0;
     if (hasPatronus) counts.push(`патронусов: ${order.patronusCount}`);
   } else if (order.embroideryType === "petFace") {
@@ -123,17 +123,28 @@ const sendOrderToTelegram = async (order, attachments = []) => {
   }
   const countsStr = counts.length ? ` (${md(counts.join(", "))})` : "";
   const priceText = priceLabel(order);
+  const customerName = fullName(order);
+  const recipientName = String(order.recipientFullName || "").trim();
+  const separateRecipient = recipientName && recipientName !== customerName;
+  const contactDetails = [
+    order.email ? `E-mail: ${md(order.email)}` : "",
+    order.preferredContact ? `Связь: ${md(order.preferredContact)}` : "",
+  ].filter(Boolean);
 
   const mainMessage =
     `🧾 *Заказ #${order.id} — новый*\n` +
-    `👤 ${md(fullName(order)) || "Имя не указано"}\n` +
+    `👤 ${md(customerName) || "Имя не указано"}\n` +
     `📞 ${md(formatPhone(order.phone))}\n` +
+    (separateRecipient ? `📦 Получатель: ${md(recipientName)}\n` : "") +
+    (contactDetails.length ? `${contactDetails.join(" • ")}\n` : "") +
     `🧥 ${md(order.productType || "-")} • ${md(order.color || "-")} • ${md(order.size || "-")}\n` +
     (embroidery
-      ? `🧵 ${md(embroidery)}${countsStr}${order.customText ? ` «${md(order.customText)}»` : ""}\n`
+      ? `🧵 ${md(embroidery)}${countsStr}${order.customText ? ` «${md(order.customText)}»` : ""}${order.customTextFont ? ` • шрифт: ${md(order.customTextFont)}` : ""}\n`
       : ""
     ) +
+    (order.deliveryCity ? `🏙 ${md(order.deliveryCity)}\n` : "") +
     `📍 ${md(order.deliveryAddress || "-")}\n` +
+    (order.deliveryComment ? `🚚 ${md(order.deliveryComment)}\n` : "") +
     `💰 ${md(priceText)}\n` +
     (order.paidAt ? `✅ Оплачен: ${md(formatPaidAt(order.paidAt))}\n` : "");
 
