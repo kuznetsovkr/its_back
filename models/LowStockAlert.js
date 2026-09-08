@@ -7,8 +7,6 @@ const LowStockAlert = sequelize.define("low_stock_alert", {
   threshold: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 10 },
   notifiedAt: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
   clearedAt: { type: DataTypes.DATE, allowNull: true },
-}, {
-  indexes: [{ unique: true, fields: ["inventoryId"] }],
 });
 
 module.exports = LowStockAlert;

@@ -8,6 +8,13 @@
     "start": "node index.js",
     "start:demo": "node -r dotenv/config index.js dotenv_config_path=.env.demo",
     "dev": "nodemon index.js",
+    "db:migrate": "sequelize-cli db:migrate",
+    "db:migrate:status": "sequelize-cli db:migrate:status",
+    "db:migrate:undo": "sequelize-cli db:migrate:undo",
+    "db:migrate:undo:all": "sequelize-cli db:migrate:undo:all",
+    "db:migrate:baseline": "node scripts/baseline-migrations.js",
+    "db:migrate:baseline:apply": "node scripts/baseline-migrations.js --apply",
+    "test:migrations": "node scripts/verify-migrations.js",
     "lint": "eslint . --ext .js",
     "lint:fix": "npm run lint -- --fix"
   },

@@ -23,6 +23,7 @@ const {
   closeRateLimitStore,
   initializeRateLimitStore,
 } = require("./services/rateLimitStore");
+const { assertDatabaseMigrationsCurrent } = require("./services/databaseMigrations");
 const {
   TELEGRAM_CHANNELS,
   getTelegramChannelConfig,
@@ -37,7 +38,6 @@ require("./models/OrderShipment");
 const ENABLE_LOW_STOCK_CRON = process.env.ENABLE_LOW_STOCK_CRON === "1";
 const ENABLE_RESERVATION_CRON = process.env.ENABLE_RESERVATION_CRON !== "0";
 const ENABLE_CDEK_RETRY_CRON = process.env.ENABLE_CDEK_RETRY_CRON !== "0";
-const ENABLE_DB_ALTER_SYNC = process.env.ENABLE_DB_ALTER_SYNC === "1";
 const ENABLE_STARTUP_WARNINGS = process.env.ENABLE_STARTUP_WARNINGS === "1";
 
 const orderTelegramConfig = getTelegramChannelConfig(TELEGRAM_CHANNELS.ORDERS);
@@ -109,11 +109,7 @@ const start = async () => {
     console.log(`[startup] Rate-limit store: ${rateLimitStore.mode}`);
     await clearTemporaryUploads();
     await sequelize.authenticate();
-    if (ENABLE_DB_ALTER_SYNC) {
-      await sequelize.sync({ alter: { drop: false } });
-    } else {
-      await sequelize.sync();
-    }
+    await assertDatabaseMigrationsCurrent(sequelize);
 
     if (ENABLE_LOW_STOCK_CRON) {
       checkAllAndNotify().catch((e) => console.error("Initial low-stock check error:", e));
