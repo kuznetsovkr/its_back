@@ -1,6 +1,5 @@
 ﻿require("dotenv").config();
 const express = require("express");
-const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
 const cron = require("node-cron");
@@ -19,6 +18,7 @@ const { checkAllAndNotify, checkItemAndNotify } = require("./services/lowStockMo
 const { releaseExpiredReservations } = require("./services/inventoryReservations");
 const { retryPendingCdekShipments } = require("./services/cdekShipments");
 const { clearTemporaryUploads } = require("./lib/uploadSecurity");
+const { createCorsMiddleware, handleCorsError } = require("./middleware/corsPolicy");
 const {
   TELEGRAM_CHANNELS,
   getTelegramChannelConfig,
@@ -56,7 +56,8 @@ const FRONTEND_BUILD_DIR =
   process.env.FRONTEND_BUILD_DIR || path.resolve(__dirname, "..", "its_prototype", "build");
 const FRONTEND_INDEX_FILE = path.join(FRONTEND_BUILD_DIR, "index.html");
 
-app.use(cors());
+app.use(createCorsMiddleware());
+app.use(handleCorsError);
 app.use(express.json({ limit: "64kb", strict: true }));
 
 app.use("/api/auth", authRoutes);
