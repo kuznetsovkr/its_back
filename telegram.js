@@ -6,19 +6,25 @@ const {
   getTelegramChannelConfig,
   getTelegramRecipients,
 } = require("./services/telegramChannels");
+const { getTelegramAxiosRequestConfig } = require("./services/telegramProxy");
 
 const CHANNEL = TELEGRAM_CHANNELS.ORDERS;
+const telegramRequestConfig = getTelegramAxiosRequestConfig();
 
 async function sendText(chatId, text) {
   const { enabled, token } = getTelegramChannelConfig(CHANNEL);
   if (!enabled || !token || !chatId) return false;
   try {
-    await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
-      chat_id: chatId,
-      text,
-      parse_mode: "Markdown",
-      disable_web_page_preview: true,
-    });
+    await axios.post(
+      `https://api.telegram.org/bot${token}/sendMessage`,
+      {
+        chat_id: chatId,
+        text,
+        parse_mode: "Markdown",
+        disable_web_page_preview: true,
+      },
+      telegramRequestConfig
+    );
     return true;
   } catch (e) {
     console.error(`TG sendMessage(${chatId}) error:`, e.response?.data || e.message);
@@ -31,10 +37,11 @@ async function sendPhoto(chatId, fileOrId, filename) {
   if (!enabled || !token || !chatId) return null;
   try {
     if (typeof fileOrId === "string" && !Buffer.isBuffer(fileOrId)) {
-      await axios.post(`https://api.telegram.org/bot${token}/sendPhoto`, {
-        chat_id: chatId,
-        photo: fileOrId,
-      });
+      await axios.post(
+        `https://api.telegram.org/bot${token}/sendPhoto`,
+        { chat_id: chatId, photo: fileOrId },
+        telegramRequestConfig
+      );
       return null;
     }
     const form = new FormData();
@@ -44,7 +51,7 @@ async function sendPhoto(chatId, fileOrId, filename) {
     const resp = await axios.post(
       `https://api.telegram.org/bot${token}/sendPhoto`,
       form,
-      { headers: form.getHeaders() }
+      { ...telegramRequestConfig, headers: form.getHeaders() }
     );
 
     const photos = resp?.data?.result?.photo || [];

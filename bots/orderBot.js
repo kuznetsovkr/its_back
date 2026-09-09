@@ -6,11 +6,14 @@ const {
   TELEGRAM_CHANNELS,
   getTelegramChannelConfig,
 } = require("../services/telegramChannels");
+const { createTelegramBotOptions } = require("../services/telegramProxy");
 
 const channel = TELEGRAM_CHANNELS.ORDERS;
 const channelConfig = getTelegramChannelConfig(channel);
 
-const bot = new TelegramBotAdapter(new Bot(channelConfig.token));
+const bot = new TelegramBotAdapter(
+  new Bot(channelConfig.token, createTelegramBotOptions())
+);
 
 attachSubscriptionHandlers(bot, {
   channel,

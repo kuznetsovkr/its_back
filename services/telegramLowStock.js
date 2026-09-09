@@ -4,16 +4,20 @@ const {
   getTelegramChannelConfig,
   getTelegramRecipients,
 } = require("./telegramChannels");
+const { getTelegramAxiosRequestConfig } = require("./telegramProxy");
 
 const CHANNEL = TELEGRAM_CHANNELS.LOW_STOCK;
+const telegramRequestConfig = getTelegramAxiosRequestConfig();
 
 async function sendTo(chatId, text) {
   const { enabled, token } = getTelegramChannelConfig(CHANNEL);
   if (!enabled || !token || !chatId) return false;
   try {
-    await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
-      chat_id: chatId, text, parse_mode: "Markdown", disable_web_page_preview: true,
-    });
+    await axios.post(
+      `https://api.telegram.org/bot${token}/sendMessage`,
+      { chat_id: chatId, text, parse_mode: "Markdown", disable_web_page_preview: true },
+      telegramRequestConfig
+    );
     return true;
   } catch (e) {
     console.error("Telegram send error:", chatId, e.response?.data || e.message);
