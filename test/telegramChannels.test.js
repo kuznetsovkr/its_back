@@ -66,7 +66,7 @@ test("пустой allowlist и одинаковые токены запреща
       token: "token",
       allowedChatIds: [],
     }]),
-    /allowlist is empty/
+    /allowlist and invite token are empty/
   );
 
   assert.throws(
@@ -76,6 +76,69 @@ test("пустой allowlist и одинаковые токены запреща
     ]),
     /different bot tokens/
   );
+});
+
+test("a private invite token enables stored subscribers without a chat ID allowlist", async () => {
+  const inviteToken = "a".repeat(32);
+  const config = {
+    channel: TELEGRAM_CHANNELS.ORDERS,
+    enabled: true,
+    token: "orders-token",
+    inviteToken,
+    fixedChatIds: [],
+    allowedChatIds: [],
+  };
+  const subscriberModel = {
+    async findAll() {
+      return [{ chatId: "42" }, { chatId: "99" }];
+    },
+  };
+
+  assert.doesNotThrow(() => validateTelegramChannelConfig([config]));
+  assert.deepEqual(
+    await getTelegramRecipients(TELEGRAM_CHANNELS.ORDERS, { config, subscriberModel }),
+    ["42", "99"]
+  );
+});
+
+test("start stores a subscriber only after a valid private invitation", async () => {
+  const handlers = [];
+  const messages = [];
+  const upserts = [];
+  const inviteToken = "b".repeat(32);
+  const bot = {
+    onText(pattern, handler) {
+      handlers.push({ pattern, handler });
+    },
+    async sendMessage(chatId, text) {
+      messages.push({ chatId: String(chatId), text });
+    },
+  };
+  const subscriberModel = {
+    async findOne() {
+      return null;
+    },
+    async upsert(value) {
+      upserts.push(value);
+    },
+  };
+
+  attachSubscriptionHandlers(bot, {
+    channel: TELEGRAM_CHANNELS.ORDERS,
+    channelConfig: { allowedChatIds: [], inviteToken },
+    subscriberModel,
+  });
+
+  await handlers[0].handler({ chat: { id: 42 }, text: "/start wrong", from: {} });
+  await handlers[0].handler({
+    chat: { id: 42 },
+    text: `/start ${inviteToken}`,
+    from: { username: "manager" },
+  });
+
+  assert.equal(upserts.length, 1);
+  assert.equal(upserts[0].chatId, "42");
+  assert.equal(messages.length, 2);
 });
 
 test("команда start сохраняет только разрешённый chat ID в нужный канал", async () => {

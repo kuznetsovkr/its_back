@@ -1,5 +1,8 @@
 const TelegramChannelSubscriber = require("../models/TelegramChannelSubscriber");
-const { isChatAllowed } = require("../services/telegramChannels");
+const {
+  isChatAllowed,
+  isInviteTokenValid,
+} = require("../services/telegramChannels");
 
 module.exports = function attachSubscriptionHandlers(
   bot,
@@ -34,7 +37,14 @@ module.exports = function attachSubscriptionHandlers(
   // /start — подписывает
   registerCommand(/^\/start\b/i, async (msg) => {
     const chatId = String(msg.chat.id);
-    if (!isChatAllowed(channelConfig, chatId)) {
+    const existingSubscription = await subscriberModel.findOne({ where: { channel, chatId } });
+    const suppliedInviteToken = String(msg.text || "").trim().split(/\s+/, 2)[1] || "";
+    const canSubscribe =
+      isChatAllowed(channelConfig, chatId) ||
+      Boolean(existingSubscription) ||
+      isInviteTokenValid(channelConfig, suppliedInviteToken);
+
+    if (!canSubscribe) {
       await bot.sendMessage(chatId, forbiddenText);
       return;
     }
