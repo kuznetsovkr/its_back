@@ -110,6 +110,13 @@ mkdir -p "$release_dir/frontend" "$release_dir/backend"
 tar -xzf "$frontend_archive" --no-same-owner --no-same-permissions -C "$release_dir/frontend"
 tar -xzf "$backend_archive" --no-same-owner --no-same-permissions -C "$release_dir/backend"
 
+# The restrictive process umask protects backend code and configuration. The
+# compiled frontend is public, so nginx must be able to traverse its release
+# directory and read every generated asset.
+chmod 0755 "$release_dir" "$release_dir/frontend"
+find "$release_dir/frontend" -type d -exec chmod 0755 {} +
+find "$release_dir/frontend" -type f -exec chmod 0644 {} +
+
 if [[ ! -f "$release_dir/frontend/index.html" || ! -f "$release_dir/backend/package.json" ]]; then
   echo "Release archives do not contain the expected application files" >&2
   exit 65
