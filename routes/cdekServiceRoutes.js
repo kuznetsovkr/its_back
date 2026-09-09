@@ -5,19 +5,30 @@ const { cdekCalculateRateLimit, cdekOfficesRateLimit } = require("../middleware/
 const { RequestValidationError } = require("../lib/requestValidation");
 const {
   buildCdekCalculatePayload,
+  buildCdekOfficesByCoordinateParams,
   buildCdekOfficesParams,
 } = require("../lib/cdekRequestValidation");
 const { getCdekRequestContext } = require("../services/cdekClient");
 
 const router = express.Router();
 const SERVICE_PATHS = ["/service.php", "/api/service.php"];
+const CDEK_WIDGET_SERVICE_VERSION = "4.0.0";
+
+const setWidgetHeaders = (res) => {
+  res.setHeader("X-Service-Version", CDEK_WIDGET_SERVICE_VERSION);
+};
+
+const withWidgetClientHeaders = (headers) => ({
+  ...headers,
+  "X-App-Name": "widget_pvz",
+  "X-App-Version": CDEK_WIDGET_SERVICE_VERSION,
+});
 
 const relayHeaders = (upstreamHeaders, res) => {
   for (const name of [
     "x-total-elements",
     "x-current-page",
     "x-total-pages",
-    "x-service-version",
     "server-timing",
   ]) {
     const value = upstreamHeaders?.[name];
@@ -49,16 +60,22 @@ router.get(
   requireTrustedOrigin,
   cdekOfficesRateLimit,
   async (req, res) => {
+    setWidgetHeaders(res);
     try {
-      if (String(req.query.action || "").toLowerCase() !== "offices") {
+      const action = String(req.query.action || "").toLowerCase();
+      if (!["offices", "bycoordinate"].includes(action)) {
         return res.status(400).json({ message: "Unknown action" });
       }
 
-      const params = buildCdekOfficesParams(req.query);
+      const isPolygonRequest = action === "bycoordinate";
+      const params = isPolygonRequest
+        ? buildCdekOfficesByCoordinateParams(req.query)
+        : buildCdekOfficesParams(req.query);
       const { baseUrl, headers } = await getCdekRequestContext();
-      const response = await axios.get(`${baseUrl}/deliverypoints`, {
+      const endpoint = isPolygonRequest ? "deliverypoints/byPolygons" : "deliverypoints";
+      const response = await axios.get(`${baseUrl}/${endpoint}`, {
         params,
-        headers,
+        headers: withWidgetClientHeaders(headers),
         timeout: 15_000,
       });
 
@@ -75,6 +92,7 @@ router.post(
   requireTrustedOrigin,
   cdekCalculateRateLimit,
   async (req, res) => {
+    setWidgetHeaders(res);
     try {
       if (!req.is("application/json")) {
         return res.status(415).json({ message: "Content-Type должен быть application/json" });
@@ -86,7 +104,7 @@ router.post(
       const payload = buildCdekCalculatePayload(req.body);
       const { baseUrl, headers } = await getCdekRequestContext();
       const response = await axios.post(`${baseUrl}/calculator/tarifflist`, payload, {
-        headers,
+        headers: withWidgetClientHeaders(headers),
         timeout: 15_000,
       });
 
@@ -99,6 +117,7 @@ router.post(
 );
 
 router.all(SERVICE_PATHS, (_req, res) => {
+  setWidgetHeaders(res);
   return res.status(405).json({ message: "Method not allowed" });
 });
 

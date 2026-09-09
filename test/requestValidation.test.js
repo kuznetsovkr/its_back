@@ -7,6 +7,7 @@ const {
 } = require("../lib/requestValidation");
 const {
   buildCdekCalculatePayload,
+  buildCdekOfficesByCoordinateParams,
   buildCdekOfficesParams,
 } = require("../lib/cdekRequestValidation");
 
@@ -129,6 +130,61 @@ test("public CDEK office query accepts only bounded allowlisted filters", () => 
   );
   assert.throws(
     () => buildCdekOfficesParams({ action: "offices", secret_option: "1" }),
+    RequestValidationError
+  );
+});
+
+test("public CDEK polygon query validates viewport bounds and filters", () => {
+  const params = buildCdekOfficesByCoordinateParams({
+    action: "byCoordinate",
+    latitude_right_top: "56.2",
+    longitude_right_top: "93.1",
+    latitude_left_bottom: "55.8",
+    longitude_left_bottom: "92.6",
+    type: "all",
+    is_handout: "true",
+    have_cashless: "false",
+  });
+
+  assert.deepEqual(params, {
+    latitude_right_top: 56.2,
+    longitude_right_top: 93.1,
+    latitude_left_bottom: 55.8,
+    longitude_left_bottom: 92.6,
+    type: "ALL",
+    have_cashless: false,
+    is_handout: true,
+  });
+
+  assert.throws(
+    () => buildCdekOfficesByCoordinateParams({
+      action: "byCoordinate",
+      latitude_right_top: "56.2",
+      longitude_right_top: "93.1",
+      latitude_left_bottom: "57",
+      longitude_left_bottom: "92.6",
+    }),
+    (error) => error.field === "latitude_right_top"
+  );
+  assert.throws(
+    () => buildCdekOfficesByCoordinateParams({
+      action: "byCoordinate",
+      latitude_right_top: "56.2",
+      longitude_right_top: "181",
+      latitude_left_bottom: "55.8",
+      longitude_left_bottom: "92.6",
+    }),
+    (error) => error.field === "longitude_right_top"
+  );
+  assert.throws(
+    () => buildCdekOfficesByCoordinateParams({
+      action: "byCoordinate",
+      latitude_right_top: "56.2",
+      longitude_right_top: "93.1",
+      latitude_left_bottom: "55.8",
+      longitude_left_bottom: "92.6",
+      unexpected: "1",
+    }),
     RequestValidationError
   );
 });
