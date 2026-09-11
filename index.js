@@ -24,6 +24,7 @@ const {
   initializeRateLimitStore,
 } = require("./services/rateLimitStore");
 const { assertDatabaseMigrationsCurrent } = require("./services/databaseMigrations");
+const { isClientAppRoute } = require("./config/clientRoutes");
 const {
   TELEGRAM_CHANNELS,
   getTelegramChannelConfig,
@@ -95,7 +96,7 @@ if (fs.existsSync(FRONTEND_INDEX_FILE)) {
       return next();
     }
 
-    return res.sendFile(FRONTEND_INDEX_FILE);
+    return res.status(isClientAppRoute(req.path) ? 200 : 404).sendFile(FRONTEND_INDEX_FILE);
   });
 } else {
   if (ENABLE_STARTUP_WARNINGS) {

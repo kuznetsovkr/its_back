@@ -34,12 +34,16 @@ release_dir="/srv/its/releases/$release_id"
 current_link="/srv/its/current"
 next_link="/srv/its/.current-$release_id"
 lock_file="/srv/its/.deploy.lock"
+nginx_site="/etc/nginx/sites-available/its-stage"
+nginx_backup="/etc/nginx/sites-available/.its-stage-$release_id.backup"
+nginx_candidate="$HOME/.its-nginx-$release_id.conf"
 previous_release=""
 switched=0
 migrations_applied=0
+nginx_config_changed=0
 
 cleanup_uploads() {
-  rm -f -- "$frontend_archive" "$backend_archive" "$remote_helper"
+  rm -f -- "$frontend_archive" "$backend_archive" "$remote_helper" "$nginx_candidate"
 }
 
 rollback_after_error() {
@@ -60,6 +64,16 @@ rollback_after_error() {
 
   if [[ "$migrations_applied" -eq 1 ]]; then
     echo "Database migrations were applied and were not automatically reverted" >&2
+  fi
+
+  if [[ "$nginx_config_changed" -eq 1 && -f "$nginx_backup" ]]; then
+    if sudo cp -- "$nginx_backup" "$nginx_site" && sudo nginx -t; then
+      sudo systemctl reload nginx
+      sudo rm -f -- "$nginx_backup"
+      echo "Nginx configuration was restored" >&2
+    else
+      echo "CRITICAL: failed to restore the previous nginx configuration" >&2
+    fi
   fi
 
   exit "$exit_code"
@@ -122,6 +136,12 @@ if [[ ! -f "$release_dir/frontend/index.html" || ! -f "$release_dir/backend/pack
   exit 65
 fi
 
+nginx_template="$release_dir/backend/deploy/nginx-stage.conf.template"
+if [[ ! -f "$nginx_template" ]]; then
+  echo "Release does not contain the nginx staging template" >&2
+  exit 65
+fi
+
 cat >"$release_dir/RELEASE" <<EOF
 release=$release_id
 deployed_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -158,11 +178,21 @@ if [[ -z "$previous_release" || ! -d "$previous_release" ]]; then
   exit 72
 fi
 
+if [[ ! -f "$nginx_site" ]]; then
+  echo "Current nginx staging configuration was not found: $nginx_site" >&2
+  exit 72
+fi
+
+sed "s/__DOMAIN__/$domain/g" "$nginx_template" > "$nginx_candidate"
+sudo cp -- "$nginx_site" "$nginx_backup"
+sudo install -o root -g root -m 0644 "$nginx_candidate" "$nginx_site"
+nginx_config_changed=1
 sudo nginx -t
 ln -s "$release_dir" "$next_link"
 mv -Tf "$next_link" "$current_link"
 switched=1
 
+sudo systemctl reload nginx
 sudo systemctl restart its-stage
 
 smoke_test() {
@@ -171,7 +201,9 @@ smoke_test() {
     if sudo systemctl is-active --quiet its-stage \
       && curl -fsS --max-time 10 -o /dev/null "http://127.0.0.1:5000/api/clothing-types" \
       && curl -fsS --max-time 10 "https://$domain/" | grep -Eq '<title>[^<]+</title>' \
-      && curl -fsS --max-time 10 -o /dev/null "https://$domain/order"; then
+      && curl -fsS --max-time 10 -o /dev/null "https://$domain/order" \
+      && [[ "$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' "https://$domain/payment")" == "404" ]] \
+      && [[ "$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' "https://$domain/__its-not-found-$release_id")" == "404" ]]; then
       return 0
     fi
     sleep 2
@@ -184,5 +216,7 @@ smoke_test() {
 
 smoke_test
 
+sudo rm -f -- "$nginx_backup"
+nginx_config_changed=0
 trap - ERR
 echo "DEPLOY_OK release=$release_dir previous=$previous_release"
