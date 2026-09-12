@@ -1,0 +1,22 @@
+[Unit]
+Description=ITS staging PostgreSQL backup
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+EnvironmentFile=/etc/its-site/stage.env
+Environment=ITS_BACKUP_RETENTION_DAYS=14
+ExecStart=/usr/local/sbin/its-stage-postgres-backup
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/backups/its-stage/postgresql
