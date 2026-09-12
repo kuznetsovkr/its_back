@@ -1,0 +1,31 @@
+[Unit]
+Description=ITS staging release and order-photo retention
+After=network-online.target postgresql.service its-stage-backup.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=itsdeploy
+Group=itsdeploy
+UMask=0077
+WorkingDirectory=/srv/its/current/backend
+EnvironmentFile=/etc/its-site/stage.env
+EnvironmentFile=-/etc/its-site/maintenance.env
+ExecStart=/usr/bin/node /srv/its/current/backend/scripts/cleanup-order-uploads.js
+ExecStart=/usr/bin/bash /srv/its/current/backend/scripts/prune-releases.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/srv/its/shared/uploads /srv/its/releases /srv/its/.deploy.lock

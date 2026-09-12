@@ -1,0 +1,13 @@
+[Unit]
+Description=Daily ITS staging release and order-photo retention
+
+[Timer]
+OnCalendar=*-*-* 03:15:00 UTC
+Persistent=true
+RandomizedDelaySec=5m
+AccuracySec=1m
+Unit=its-stage-maintenance.service
+
+[Install]
+WantedBy=timers.target
+

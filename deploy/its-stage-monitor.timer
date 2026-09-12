@@ -1,0 +1,14 @@
+[Unit]
+Description=Run ITS staging monitoring every five minutes
+
+[Timer]
+OnBootSec=2m
+OnUnitActiveSec=5m
+AccuracySec=30s
+RandomizedDelaySec=30s
+Persistent=true
+Unit=its-stage-monitor.service
+
+[Install]
+WantedBy=timers.target
+
