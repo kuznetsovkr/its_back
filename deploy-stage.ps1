@@ -171,7 +171,13 @@ try {
     Invoke-NativeCommand -FilePath "npm.cmd" -Arguments @("test") -WorkingDirectory $BackendRoot
 
     Write-Step "Building frontend for staging"
-    $buildVariables = @("VITE_API_URL", "VITE_CDEK_SERVICE_URL", "VITE_DEMO_MODE")
+    $buildVariables = @(
+        "VITE_API_URL",
+        "VITE_CDEK_SERVICE_URL",
+        "VITE_DEMO_MODE",
+        "VITE_SITE_URL",
+        "VITE_ALLOW_INDEXING"
+    )
     $previousBuildEnvironment = @{}
     foreach ($name in $buildVariables) {
         $previousBuildEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
@@ -181,6 +187,8 @@ try {
         Set-ProcessEnvironmentValue -Name "VITE_API_URL" -Value "/api"
         Set-ProcessEnvironmentValue -Name "VITE_CDEK_SERVICE_URL" -Value "/service.php"
         Set-ProcessEnvironmentValue -Name "VITE_DEMO_MODE" -Value "false"
+        Set-ProcessEnvironmentValue -Name "VITE_SITE_URL" -Value "https://its-site.ru"
+        Set-ProcessEnvironmentValue -Name "VITE_ALLOW_INDEXING" -Value "false"
         Invoke-NativeCommand -FilePath "npm.cmd" -Arguments @("run", "build") -WorkingDirectory $FrontendRoot
     }
     finally {
@@ -192,6 +200,19 @@ try {
     $FrontendIndex = Join-Path $FrontendBuildDirectory "index.html"
     if (-not (Test-Path -LiteralPath $FrontendIndex -PathType Leaf)) {
         throw "Frontend build did not produce $FrontendIndex"
+    }
+    $FrontendRobots = Join-Path $FrontendBuildDirectory "robots.txt"
+    $FrontendSitemap = Join-Path $FrontendBuildDirectory "sitemap.xml"
+    $FrontendCertificateIndex = Join-Path $FrontendBuildDirectory "certificate\index.html"
+    $FrontendNotFound = Join-Path $FrontendBuildDirectory "404.html"
+    if (-not (Test-Path -LiteralPath $FrontendRobots -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $FrontendSitemap -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $FrontendCertificateIndex -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $FrontendNotFound -PathType Leaf)) {
+        throw "Frontend build did not produce the expected SEO assets"
+    }
+    if ((Get-Content -LiteralPath $FrontendRobots -Raw) -notmatch "(?m)^Disallow: /$") {
+        throw "Staging robots.txt must disallow indexing"
     }
 
     Write-Step "Creating release archives"

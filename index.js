@@ -65,6 +65,7 @@ if (process.env.TRUST_PROXY === "1") {
 const FRONTEND_BUILD_DIR =
   process.env.FRONTEND_BUILD_DIR || path.resolve(__dirname, "..", "its_prototype", "build");
 const FRONTEND_INDEX_FILE = path.join(FRONTEND_BUILD_DIR, "index.html");
+const FRONTEND_NOT_FOUND_FILE = path.join(FRONTEND_BUILD_DIR, "404.html");
 
 app.use(createCorsMiddleware());
 app.use(handleCorsError);
@@ -103,7 +104,18 @@ if (fs.existsSync(FRONTEND_INDEX_FILE)) {
       return next();
     }
 
-    return res.status(isClientAppRoute(req.path) ? 200 : 404).sendFile(FRONTEND_INDEX_FILE);
+    const isKnownClientRoute = isClientAppRoute(req.path);
+    const normalizedPath = req.path === "/" ? "/" : req.path.replace(/\/+$/, "");
+    const routeIndexFile = isKnownClientRoute && normalizedPath !== "/"
+      ? path.join(FRONTEND_BUILD_DIR, ...normalizedPath.slice(1).split("/"), "index.html")
+      : FRONTEND_INDEX_FILE;
+    const notFoundFile = fs.existsSync(FRONTEND_NOT_FOUND_FILE)
+      ? FRONTEND_NOT_FOUND_FILE
+      : FRONTEND_INDEX_FILE;
+    const responseFile = isKnownClientRoute
+      ? (fs.existsSync(routeIndexFile) ? routeIndexFile : FRONTEND_INDEX_FILE)
+      : notFoundFile;
+    return res.status(isKnownClientRoute ? 200 : 404).sendFile(responseFile);
   });
 } else {
   if (ENABLE_STARTUP_WARNINGS) {

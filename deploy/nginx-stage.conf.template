@@ -61,6 +61,12 @@ server {
         try_files $uri =404;
     }
 
+    location = /404.html {
+        internal;
+        expires -1;
+        try_files $uri =404;
+    }
+
     location ^~ /uploads/ {
         return 404;
     }
@@ -104,13 +110,13 @@ server {
 
     # These are the only valid client-side entry points. Keeping the list
     # explicit prevents retired or mistyped URLs from returning a false 200.
-    location ~ ^/(?:certificate|order|embroidery|recipient|thank-you|payment-success|payment-fail|admin(?:/inventory)?)/?$ {
+    location ~ ^/(?<app_route>certificate|order|embroidery|recipient|thank-you|payment-success|payment-fail|admin(?:/inventory)?)/?$ {
         expires -1;
-        try_files /index.html =404;
+        try_files /$app_route/index.html /index.html =404;
     }
 
     location / {
-        error_page 404 =404 /index.html;
+        error_page 404 =404 /404.html;
         try_files $uri $uri/ =404;
     }
 }
