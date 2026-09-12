@@ -9,6 +9,16 @@ const { getCdekFromLocation, getGoodsPreset } = require("./orderPricing");
 const { sendOrderIssueToTelegram } = require("../telegram");
 
 const PROCESSING_TIMEOUT_MS = 10 * 60 * 1000;
+const RETRY_BASE_DELAY_MS = 5 * 60 * 1000;
+const RETRY_MAX_DELAY_MS = 6 * 60 * 60 * 1000;
+
+const getCdekRetryDelayMs = (attempts) => {
+  const normalizedAttempts = Math.max(1, Number(attempts) || 1);
+  return Math.min(
+    RETRY_BASE_DELAY_MS * (2 ** Math.min(normalizedAttempts - 1, 10)),
+    RETRY_MAX_DELAY_MS
+  );
+};
 
 const markCdekShipmentReady = async (orderId, transaction) => {
   const shipment = await OrderShipment.findOne({
@@ -19,6 +29,7 @@ const markCdekShipmentReady = async (orderId, transaction) => {
   if (!shipment || shipment.status === "created") return shipment;
   shipment.status = "ready";
   shipment.lastError = null;
+  shipment.nextAttemptAt = null;
   await shipment.save({ transaction });
   return shipment;
 };
@@ -49,6 +60,7 @@ const claimShipment = async (orderId) =>
 
     shipment.status = "processing";
     shipment.processingStartedAt = new Date();
+    shipment.nextAttemptAt = null;
     shipment.attempts = Number(shipment.attempts || 0) + 1;
     shipment.lastError = null;
     await shipment.save({ transaction });
@@ -123,6 +135,7 @@ const createCdekShipmentForOrder = async (orderId) => {
       shipment.cdekNumber = entity.cdek_number || shipment.cdekNumber;
       shipment.createdAtProvider = new Date();
       shipment.processingStartedAt = null;
+      shipment.nextAttemptAt = null;
       shipment.lastError = null;
       await shipment.save();
     }
@@ -134,6 +147,7 @@ const createCdekShipmentForOrder = async (orderId) => {
     await OrderShipment.update({
       status: "failed",
       processingStartedAt: null,
+      nextAttemptAt: new Date(Date.now() + getCdekRetryDelayMs(claimed.shipment.attempts)),
       lastError: errorMessage,
     }, { where: { orderId, provider: "cdek", status: "processing" } });
     if (Number(claimed.shipment.attempts) === 1) {
@@ -172,10 +186,18 @@ const refreshCdekShipment = async (orderId) => {
 
 const retryPendingCdekShipments = async ({ limit = 20 } = {}) => {
   const staleBefore = new Date(Date.now() - PROCESSING_TIMEOUT_MS);
+  const now = new Date();
   const shipments = await OrderShipment.findAll({
     where: {
       [Op.or]: [
-        { status: { [Op.in]: ["ready", "failed"] } },
+        { status: "ready" },
+        {
+          status: "failed",
+          [Op.or]: [
+            { nextAttemptAt: { [Op.is]: null } },
+            { nextAttemptAt: { [Op.lte]: now } },
+          ],
+        },
         { status: "processing", processingStartedAt: { [Op.lte]: staleBefore } },
         { status: "created", cdekNumber: { [Op.is]: null } },
       ],
@@ -202,6 +224,7 @@ const retryPendingCdekShipments = async ({ limit = 20 } = {}) => {
 module.exports = {
   buildCdekOrderPayload,
   createCdekShipmentForOrder,
+  getCdekRetryDelayMs,
   markCdekShipmentReady,
   refreshCdekShipment,
   retryPendingCdekShipments,

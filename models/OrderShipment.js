@@ -27,12 +27,14 @@ const OrderShipment = sequelize.define("order_shipment", {
   cdekNumber: { type: DataTypes.STRING(64), allowNull: true },
   attempts: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0, validate: { min: 0 } },
   processingStartedAt: { type: DataTypes.DATE, allowNull: true },
+  nextAttemptAt: { type: DataTypes.DATE, allowNull: true },
   createdAtProvider: { type: DataTypes.DATE, allowNull: true },
   lastError: { type: DataTypes.TEXT, allowNull: true },
 }, {
   indexes: [
     { unique: true, fields: ["orderId"] },
     { fields: ["status", "processingStartedAt"] },
+    { fields: ["status", "nextAttemptAt"] },
   ],
 });
 

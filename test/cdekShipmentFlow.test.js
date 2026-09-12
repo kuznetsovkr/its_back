@@ -1,7 +1,10 @@
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
 
-const { buildCdekOrderPayload } = require("../services/cdekShipments");
+const {
+  buildCdekOrderPayload,
+  getCdekRetryDelayMs,
+} = require("../services/cdekShipments");
 
 test("CDEK shipment payload charges nothing on delivery and uses server parcel data", () => {
   const payload = buildCdekOrderPayload({
@@ -22,6 +25,13 @@ test("CDEK shipment payload charges nothing on delivery and uses server parcel d
   assert.equal(payload.packages[0].items[0].cost, 6500);
   assert.equal(payload.packages[0].items[0].payment.value, 0);
   assert.equal(payload.delivery_recipient_cost.value, 0);
+});
+
+test("CDEK retries use bounded exponential backoff", () => {
+  assert.equal(getCdekRetryDelayMs(1), 5 * 60 * 1000);
+  assert.equal(getCdekRetryDelayMs(2), 10 * 60 * 1000);
+  assert.equal(getCdekRetryDelayMs(3), 20 * 60 * 1000);
+  assert.equal(getCdekRetryDelayMs(100), 6 * 60 * 60 * 1000);
 });
 
 test("public CDEK endpoint no longer accepts shipment creation", async (t) => {
