@@ -19,12 +19,14 @@ const { releaseExpiredReservations } = require("./services/inventoryReservations
 const { retryPendingCdekShipments } = require("./services/cdekShipments");
 const { clearTemporaryUploads } = require("./lib/uploadSecurity");
 const { createCorsMiddleware, handleCorsError } = require("./middleware/corsPolicy");
+const { apiNotFound } = require("./middleware/notFound");
 const {
   closeRateLimitStore,
   initializeRateLimitStore,
 } = require("./services/rateLimitStore");
 const { assertDatabaseMigrationsCurrent } = require("./services/databaseMigrations");
 const { isClientAppRoute } = require("./config/clientRoutes");
+const { validateRuntimeConfig } = require("./config/runtimeConfig");
 const {
   TELEGRAM_CHANNELS,
   getTelegramChannelConfig,
@@ -40,6 +42,8 @@ const ENABLE_LOW_STOCK_CRON = process.env.ENABLE_LOW_STOCK_CRON === "1";
 const ENABLE_RESERVATION_CRON = process.env.ENABLE_RESERVATION_CRON !== "0";
 const ENABLE_CDEK_RETRY_CRON = process.env.ENABLE_CDEK_RETRY_CRON !== "0";
 const ENABLE_STARTUP_WARNINGS = process.env.ENABLE_STARTUP_WARNINGS === "1";
+
+validateRuntimeConfig(process.env);
 
 const orderTelegramConfig = getTelegramChannelConfig(TELEGRAM_CHANNELS.ORDERS);
 const lowStockTelegramConfig = getTelegramChannelConfig(TELEGRAM_CHANNELS.LOW_STOCK);
@@ -82,6 +86,8 @@ app.use("/uploads", (_req, res) => {
 const paykeeperRouter = require("./routes/payments.paykeeper");
 app.use("/api/payments/paykeeper", paykeeperRouter);
 app.use("/payments/paykeeper", paykeeperRouter);
+app.use("/api", apiNotFound);
+app.use("/payments", apiNotFound);
 
 if (fs.existsSync(FRONTEND_INDEX_FILE)) {
   app.use(express.static(FRONTEND_BUILD_DIR));

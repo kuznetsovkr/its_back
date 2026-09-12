@@ -34,8 +34,6 @@ const safeHexEqual = (received, expected) => {
     crypto.timingSafeEqual(receivedBuffer, expectedBuffer);
 };
 
-router.get("/ping", (_req, res) => res.json({ ok: true }));
-
 router.post("/link", requireOrderAccess, paymentLinkRateLimit, async (req, res) => {
   try {
     if (!req.is("application/json")) {
