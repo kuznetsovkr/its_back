@@ -1,10 +1,10 @@
 [Unit]
-Description=Daily ITS staging PostgreSQL backup
+Description=Daily ITS staging PostgreSQL and uploads backup
 
 [Timer]
-OnCalendar=*-*-* 04:15:00 UTC
+OnCalendar=*-*-* 01:45:00 UTC
 Persistent=true
-RandomizedDelaySec=10m
+RandomizedDelaySec=5m
 AccuracySec=1m
 Unit=its-stage-backup.service
 

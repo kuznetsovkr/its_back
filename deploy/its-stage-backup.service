@@ -1,5 +1,5 @@
 [Unit]
-Description=ITS staging PostgreSQL backup
+Description=ITS staging PostgreSQL and uploads backup
 After=network-online.target postgresql.service
 Wants=network-online.target
 
@@ -11,6 +11,7 @@ UMask=0077
 EnvironmentFile=/etc/its-site/stage.env
 Environment=ITS_BACKUP_RETENTION_DAYS=14
 ExecStart=/usr/local/sbin/its-stage-postgres-backup
+ExecStart=/usr/local/sbin/its-stage-uploads-backup
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
@@ -19,4 +20,4 @@ PrivateDevices=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/var/backups/its-stage/postgresql
+ReadWritePaths=/var/backups/its-stage/postgresql /var/backups/its-stage/uploads

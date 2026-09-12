@@ -1,25 +1,27 @@
 # ITS staging operations
 
-## PostgreSQL backups
+## PostgreSQL and uploads backups
 
-The FirstVDS `autobackup` job currently backs up selected filesystem paths but
-does not dump PostgreSQL. Install the application backup timer after the first
-release and whenever its unit files change:
+The application timer creates restorable PostgreSQL dumps and compressed
+archives of `/srv/its/shared/uploads`. Install it after the first release and
+whenever its scripts or unit files change:
 
 ```bash
 sudo bash /srv/its/current/backend/scripts/install-stage-backup.sh --run-now
 ```
 
-The timer creates a verified custom-format dump every day in
-`/var/backups/its-stage/postgresql`, keeps 14 days, and never prints database
-credentials. Check it with:
+The timer runs before the provider autobackup, writes verified artifacts to
+`/var/backups/its-stage/postgresql` and `/var/backups/its-stage/uploads`, keeps
+14 days, and never prints database credentials. Check it with:
 
 ```bash
 sudo systemctl status its-stage-backup.timer
 sudo systemctl status its-stage-backup.service
 sudo pg_restore --list /var/backups/its-stage/postgresql/its-stage-*.dump >/dev/null
+sudo tar -tzf /var/backups/its-stage/uploads/its-stage-uploads-*.tar.gz >/dev/null
 ```
 
-These dumps protect against logical mistakes but remain on the same server.
-Before production launch, copy them to separate storage or enable a provider
-snapshot policy and test a restore.
+The FirstVDS autobackup must include both `/var/backups/its-stage/postgresql`
+and `/srv/its/shared/uploads`, so database dumps and original uploads also have
+an off-server copy. Test both archive extraction and database restore before
+production launch.
