@@ -45,7 +45,9 @@ append_chat_ids() {
     if [[ "$chat_id" =~ ^-?[0-9]+$ ]]; then
       echo "$chat_id" >> "$target"
     fi
-  done < <(printf '%s' "$raw" | tr ',' '\n')
+  # Command substitution removes the final newline from psql output. Add it
+  # back so `read` also processes a single recipient without a trailing LF.
+  done < <(printf '%s\n' "$raw" | tr ',' '\n')
 }
 
 refresh_recipients() {
