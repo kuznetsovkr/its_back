@@ -2,15 +2,23 @@ const express = require("express");
 const Inventory = require("../models/Inventory");
 const ClothingType = require("../models/ClothingType");
 const requireAdmin = require("../middleware/requireAdmin");
+const { getPricingConfig } = require("../services/pricingConfig");
+const { getStartingPrice } = require("../services/orderPricing");
 
 const router = express.Router();
 
-const asPlainWithPrice = (item) => {
+const asPlainWithPrice = (item, pricingConfig) => {
     const plain = item.get({ plain: true });
     const ct = plain.clothingType;
+    let price = null;
+    try {
+        price = getStartingPrice(plain, pricingConfig);
+    } catch {
+        price = null;
+    }
     return {
         ...plain,
-        price: ct ? ct.price : null,
+        price,
         clothingTypeName: ct ? ct.name : null,
     };
 };
@@ -18,10 +26,13 @@ const asPlainWithPrice = (item) => {
 // Получить весь инвентарь
 router.get("/", async (_req, res) => {
     try {
-        const inventory = await Inventory.findAll({
-            include: [{ model: ClothingType, as: "clothingType", attributes: ["id", "name", "price"] }],
-        });
-        res.json(inventory.map(asPlainWithPrice));
+        const [inventory, pricingConfig] = await Promise.all([
+            Inventory.findAll({
+                include: [{ model: ClothingType, as: "clothingType", attributes: ["id", "name"] }],
+            }),
+            getPricingConfig(),
+        ]);
+        res.json(inventory.map((item) => asPlainWithPrice(item, pricingConfig)));
     } catch (error) {
         console.error("Ошибка при получении инвентаря:", error);
         res.status(500).json({ message: "Не удалось получить данные" });
@@ -44,10 +55,11 @@ router.post("/", requireAdmin, async (req, res) => {
         });
 
         const createdWithPrice = await Inventory.findByPk(newItem.id, {
-            include: [{ model: ClothingType, as: "clothingType", attributes: ["id", "name", "price"] }],
+            include: [{ model: ClothingType, as: "clothingType", attributes: ["id", "name"] }],
         });
 
-        res.json(asPlainWithPrice(createdWithPrice));
+        const pricingConfig = await getPricingConfig();
+        res.json(asPlainWithPrice(createdWithPrice, pricingConfig));
     } catch (error) {
         console.error("Ошибка при создании инвентаря:", error);
         res.status(500).json({ message: "Не удалось создать запись" });
@@ -74,10 +86,11 @@ router.put("/:id", requireAdmin, async (req, res) => {
         await item.save();
 
         const savedWithPrice = await Inventory.findByPk(item.id, {
-            include: [{ model: ClothingType, as: "clothingType", attributes: ["id", "name", "price"] }],
+            include: [{ model: ClothingType, as: "clothingType", attributes: ["id", "name"] }],
         });
 
-        res.json(asPlainWithPrice(savedWithPrice));
+        const pricingConfig = await getPricingConfig();
+        res.json(asPlainWithPrice(savedWithPrice, pricingConfig));
     } catch (err) {
         console.error("Ошибка при обновлении инвентаря:", err);
         res.status(500).json({ message: "Не удалось обновить запись" });

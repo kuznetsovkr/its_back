@@ -1,5 +1,6 @@
 const express = require("express");
 const requireTrustedOrigin = require("../middleware/trustedOrigin");
+const requireAdmin = require("../middleware/requireAdmin");
 const { pricingQuoteRateLimit } = require("../middleware/rateLimit");
 const { findInventoryForOrder } = require("../services/inventoryResolver");
 const {
@@ -16,8 +17,75 @@ const {
   readPositiveInteger,
   readString,
 } = require("../lib/requestValidation");
+const { getPricingConfig, updatePricingConfig } = require("../services/pricingConfig");
 
 const router = express.Router();
+
+const readPricingConfig = (body) => {
+  const config = ensurePlainObject(body, "body");
+  assertAllowedKeys(config, new Set(["matrix", "additional"]), "настройках цен");
+  const matrix = ensurePlainObject(config.matrix, "matrix");
+  assertAllowedKeys(matrix, new Set(["Patronus", "Car", "petFace"]), "матрице цен");
+
+  const readRow = (type) => {
+    const row = ensurePlainObject(matrix[type], `matrix.${type}`);
+    assertAllowedKeys(row, new Set(["tshirt", "svitshot", "hoodie"]), `matrix.${type}`);
+    return {
+      tshirt: readPositiveInteger(row.tshirt, `matrix.${type}.tshirt`, { max: 1_000_000 }),
+      svitshot: readPositiveInteger(row.svitshot, `matrix.${type}.svitshot`, { max: 1_000_000 }),
+      hoodie: readPositiveInteger(row.hoodie, `matrix.${type}.hoodie`, { max: 1_000_000 }),
+    };
+  };
+
+  const additional = ensurePlainObject(config.additional, "additional");
+  assertAllowedKeys(additional, new Set(["Patronus", "petFace"]), "доплатах");
+  return {
+    currency: "RUB",
+    matrix: {
+      Patronus: readRow("Patronus"),
+      Car: readRow("Car"),
+      petFace: readRow("petFace"),
+    },
+    additional: {
+      Patronus: readPositiveInteger(additional.Patronus, "additional.Patronus", {
+        min: 0,
+        max: 1_000_000,
+      }),
+      petFace: readPositiveInteger(additional.petFace, "additional.petFace", {
+        min: 0,
+        max: 1_000_000,
+      }),
+    },
+  };
+};
+
+router.get("/config", requireAdmin, async (_req, res) => {
+  try {
+    return res.json(await getPricingConfig());
+  } catch (error) {
+    console.error("[pricing] Failed to load pricing config:", error);
+    return res.status(500).json({ message: "Не удалось загрузить настройки цен" });
+  }
+});
+
+router.put("/config", requireAdmin, async (req, res) => {
+  try {
+    if (!req.is("application/json")) {
+      return res.status(415).json({ message: "Content-Type должен быть application/json" });
+    }
+    return res.json(await updatePricingConfig(readPricingConfig(req.body)));
+  } catch (error) {
+    if (error instanceof RequestValidationError) {
+      return res.status(error.statusCode).json({
+        message: error.message,
+        code: error.code,
+        field: error.field || undefined,
+      });
+    }
+    console.error("[pricing] Failed to update pricing config:", error);
+    return res.status(500).json({ message: "Не удалось сохранить настройки цен" });
+  }
+});
 
 router.post("/quote", requireTrustedOrigin, pricingQuoteRateLimit, async (req, res) => {
   try {
@@ -44,9 +112,11 @@ router.post("/quote", requireTrustedOrigin, pricingQuoteRateLimit, async (req, r
       return res.status(409).json({ message: "Товара нет в наличии" });
     }
 
+    const pricingConfig = await getPricingConfig();
+
     return res.json({
       currency: "RUB",
-      prices: getPriceCatalog({ inventory, patronusCount, petFaceCount }),
+      prices: getPriceCatalog({ inventory, patronusCount, petFaceCount, pricingConfig }),
     });
   } catch (error) {
     if (error instanceof PricingError || error instanceof RequestValidationError) {
@@ -102,11 +172,13 @@ router.post("/checkout", requireTrustedOrigin, pricingQuoteRateLimit, async (req
       return res.status(409).json({ message: "Товара нет в наличии" });
     }
 
+    const pricingConfig = await getPricingConfig();
     const merchandiseQuote = calculateMerchandisePrice({
       inventory,
       embroideryType,
       patronusCount,
       petFaceCount,
+      pricingConfig,
     });
     if (merchandiseQuote.manual || !cdekMode) {
       return res.json({

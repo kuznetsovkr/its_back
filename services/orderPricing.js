@@ -3,12 +3,6 @@ const { getCdekRequestContext } = require("./cdekClient");
 
 const DEFAULT_CDEK_TARIFF_CODE = 136;
 
-const PRICE_MATRIX = Object.freeze({
-  Patronus: Object.freeze({ tshirt: 8500, svitshot: 9500, hoodie: 10000 }),
-  Car: Object.freeze({ tshirt: 6500, svitshot: 8000, hoodie: 8500 }),
-  petFace: Object.freeze({ tshirt: 6000, svitshot: 7000, hoodie: 8000 }),
-});
-
 const GOODS_PRESETS = Object.freeze({
   hoodie: Object.freeze({ width: 35, height: 35, length: 7, weight: 800 }),
   svitshot: Object.freeze({ width: 35, height: 35, length: 7, weight: 800 }),
@@ -79,6 +73,7 @@ const calculateMerchandisePrice = ({
   embroideryType,
   patronusCount = 1,
   petFaceCount = 1,
+  pricingConfig,
 }) => {
   const normalizedType = normalizeEmbroideryType(embroideryType);
   if (normalizedType === "custom") {
@@ -91,7 +86,7 @@ const calculateMerchandisePrice = ({
   }
 
   const clothingKey = resolveClothingKey(inventory);
-  const basePrice = PRICE_MATRIX[normalizedType]?.[clothingKey];
+  const basePrice = pricingConfig?.matrix?.[normalizedType]?.[clothingKey];
   if (!Number.isInteger(basePrice) || basePrice <= 0) {
     throw new PricingError("Для выбранной комбинации цена не настроена", 422, "price_not_configured");
   }
@@ -103,7 +98,11 @@ const calculateMerchandisePrice = ({
     if (count > limit) {
       throw new PricingError(`Для выбранного изделия доступно не более ${limit} патронусов`);
     }
-    merchandisePrice += (count - 1) * 5000;
+    const additionalPrice = pricingConfig?.additional?.Patronus;
+    if (!Number.isInteger(additionalPrice) || additionalPrice < 0) {
+      throw new PricingError("Доплата за дополнительного патронуса не настроена", 500, "price_not_configured");
+    }
+    merchandisePrice += (count - 1) * additionalPrice;
   }
 
   if (normalizedType === "petFace") {
@@ -111,7 +110,11 @@ const calculateMerchandisePrice = ({
     if (count > 5) {
       throw new PricingError("Можно заказать не более 5 портретов питомца");
     }
-    merchandisePrice += (count - 1) * 2000;
+    const additionalPrice = pricingConfig?.additional?.petFace;
+    if (!Number.isInteger(additionalPrice) || additionalPrice < 0) {
+      throw new PricingError("Доплата за дополнительный портрет питомца не настроена", 500, "price_not_configured");
+    }
+    merchandisePrice += (count - 1) * additionalPrice;
   }
 
   return {
@@ -122,26 +125,40 @@ const calculateMerchandisePrice = ({
   };
 };
 
-const getPriceCatalog = ({ inventory, patronusCount = 1, petFaceCount = 1 }) => ({
+const getPriceCatalog = ({ inventory, patronusCount = 1, petFaceCount = 1, pricingConfig }) => ({
   Patronus: calculateMerchandisePrice({
     inventory,
     embroideryType: "Patronus",
     patronusCount,
     petFaceCount,
+    pricingConfig,
   }).merchandisePrice,
   Car: calculateMerchandisePrice({
     inventory,
     embroideryType: "Car",
     patronusCount,
     petFaceCount,
+    pricingConfig,
   }).merchandisePrice,
   petFace: calculateMerchandisePrice({
     inventory,
     embroideryType: "petFace",
     patronusCount,
     petFaceCount,
+    pricingConfig,
   }).merchandisePrice,
 });
+
+const getStartingPrice = (inventory, pricingConfig) => {
+  const clothingKey = resolveClothingKey(inventory);
+  const prices = ["Patronus", "Car", "petFace"]
+    .map((type) => pricingConfig?.matrix?.[type]?.[clothingKey])
+    .filter((price) => Number.isInteger(price) && price > 0);
+  if (!prices.length) {
+    throw new PricingError("Для выбранного изделия цена не настроена", 422, "price_not_configured");
+  }
+  return Math.min(...prices);
+};
 
 const getCdekTariffCode = () => {
   const code = Number(process.env.CDEK_CHECKOUT_TARIFF_CODE || DEFAULT_CDEK_TARIFF_CODE);
@@ -254,7 +271,6 @@ const calculateCdekDelivery = async ({ inventory, cdekMode, cdekAddress }) => {
 };
 
 module.exports = {
-  PRICE_MATRIX,
   PricingError,
   calculateCdekDelivery,
   calculateMerchandisePrice,
@@ -262,5 +278,6 @@ module.exports = {
   getCdekTariffCode,
   getGoodsPreset,
   getPriceCatalog,
+  getStartingPrice,
   resolveClothingKey,
 };

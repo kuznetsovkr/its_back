@@ -10,6 +10,14 @@ const {
 } = require("../services/orderPricing");
 
 const inventory = (productType) => ({ productType });
+const pricingConfig = {
+  matrix: {
+    Patronus: { tshirt: 8500, svitshot: 9500, hoodie: 10000 },
+    Car: { tshirt: 6500, svitshot: 8000, hoodie: 8500 },
+    petFace: { tshirt: 6000, svitshot: 7000, hoodie: 8000 },
+  },
+  additional: { Patronus: 5000, petFace: 2000 },
+};
 
 test("сервер рассчитывает каталог цен для выбранного изделия", () => {
   assert.deepEqual(
@@ -17,6 +25,7 @@ test("сервер рассчитывает каталог цен для выб�
       inventory: inventory("Худи"),
       patronusCount: 2,
       petFaceCount: 3,
+      pricingConfig,
     }),
     {
       Patronus: 15000,
@@ -26,12 +35,35 @@ test("сервер рассчитывает каталог цен для выб�
   );
 });
 
+test("расчёт использует переданную серверную конфигурацию без скрытых констант", () => {
+  const changedConfig = {
+    matrix: {
+      ...pricingConfig.matrix,
+      Car: { ...pricingConfig.matrix.Car, hoodie: 12345 },
+    },
+    additional: { ...pricingConfig.additional, Patronus: 777 },
+  };
+
+  assert.equal(calculateMerchandisePrice({
+    inventory: inventory("Худи"),
+    embroideryType: "Car",
+    pricingConfig: changedConfig,
+  }).merchandisePrice, 12345);
+  assert.equal(calculateMerchandisePrice({
+    inventory: inventory("Худи"),
+    embroideryType: "Patronus",
+    patronusCount: 2,
+    pricingConfig: changedConfig,
+  }).merchandisePrice, 10777);
+});
+
 test("сервер отклоняет недопустимое количество вышивок", () => {
   assert.throws(
     () => calculateMerchandisePrice({
       inventory: inventory("Футболка"),
       embroideryType: "Patronus",
       patronusCount: 2,
+      pricingConfig,
     }),
     (error) => error instanceof PricingError && /не более 1/.test(error.message)
   );
@@ -42,6 +74,7 @@ test("индивидуальная вышивка переводит заказ 
     calculateMerchandisePrice({
       inventory: inventory("Свитшот"),
       embroideryType: "custom",
+      pricingConfig,
     }),
     {
       manual: true,

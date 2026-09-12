@@ -9,7 +9,7 @@ const TABLE = "clothingTypes";
 module.exports = {
   baseline: {
     tableName: TABLE,
-    columns: ["id", "name", "price", "createdAt", "updatedAt"],
+    columns: ["id", "name", "createdAt", "updatedAt"],
     indexes: [{ unique: true, fields: ["name"] }],
   },
 

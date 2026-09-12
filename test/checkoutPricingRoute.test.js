@@ -18,6 +18,17 @@ mockModule("../services/orderPricing", {
   ...actualPricing,
   calculateCdekDelivery: async () => ({ deliveryPrice: 742 }),
 });
+mockModule("../services/pricingConfig", {
+  getPricingConfig: async () => ({
+    matrix: {
+      Patronus: { tshirt: 8500, svitshot: 9500, hoodie: 10000 },
+      Car: { tshirt: 6500, svitshot: 8000, hoodie: 8500 },
+      petFace: { tshirt: 6000, svitshot: 7000, hoodie: 8000 },
+    },
+    additional: { Patronus: 5000, petFace: 2000 },
+  }),
+  updatePricingConfig: async () => {},
+});
 
 const pricingRoutes = require("../routes/pricingRoutes");
 

@@ -12,10 +12,6 @@ const ClothingType = sequelize.define("clothingType", {
         allowNull: false,
         unique: true,
     },
-    price: {
-        type: DataTypes.INTEGER,
-        allowNull: false,
-    },
 });
 
 module.exports = ClothingType;

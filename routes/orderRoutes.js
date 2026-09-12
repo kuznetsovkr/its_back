@@ -37,6 +37,7 @@ const {
   calculateCdekDelivery,
   calculateMerchandisePrice,
 } = require("../services/orderPricing");
+const { getPricingConfig } = require("../services/pricingConfig");
 const {
   ORDER_UPLOAD_DIR,
   cleanupTemporaryFilesAfterResponse,
@@ -97,11 +98,13 @@ router.post(
       console.error("[CREATE] inventory NOT FOUND for:", productType, color, size);
       return res.status(400).json({ message: "Комбинация товара на складе не найдена" });
     }
+    const pricingConfig = await getPricingConfig();
     const merchandiseQuote = calculateMerchandisePrice({
       inventory: inv,
       embroideryType,
       patronusCount,
       petFaceCount,
+      pricingConfig,
     });
     const isManualFlow = merchandiseQuote.manual || !cdekMode;
     const cdekQuote = isManualFlow

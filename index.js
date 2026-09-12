@@ -37,6 +37,7 @@ require("./models/TelegramChannelSubscriber");
 require("./models/OrderAttachment");
 require("./models/InventoryReservation");
 require("./models/OrderShipment");
+require("./models/PricingConfig");
 
 const ENABLE_LOW_STOCK_CRON = process.env.ENABLE_LOW_STOCK_CRON === "1";
 const ENABLE_RESERVATION_CRON = process.env.ENABLE_RESERVATION_CRON !== "0";

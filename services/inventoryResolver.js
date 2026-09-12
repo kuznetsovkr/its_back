@@ -3,7 +3,7 @@ const Inventory = require("../models/Inventory");
 const ClothingType = require("../models/ClothingType");
 
 const withClothingType = {
-  include: [{ model: ClothingType, as: "clothingType", attributes: ["id", "name", "price"] }],
+  include: [{ model: ClothingType, as: "clothingType", attributes: ["id", "name"] }],
 };
 
 async function findInventoryForOrder(productType, color, size) {

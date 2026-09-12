@@ -72,6 +72,7 @@ const expectedTables = [
   "order_shipments",
   "orders",
   "payment_events",
+  "pricing_configs",
   "telegram_channel_subscribers",
 ].sort();
 
