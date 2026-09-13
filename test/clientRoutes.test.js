@@ -10,6 +10,8 @@ test("client route allowlist contains every public SPA entry point", () => {
   for (const path of [
     "/",
     "/certificate",
+    "/privacy",
+    "/offer",
     "/order",
     "/embroidery",
     "/recipient",

@@ -1,6 +1,8 @@
 const CLIENT_APP_ROUTES = new Set([
   "/",
   "/certificate",
+  "/privacy",
+  "/offer",
   "/order",
   "/embroidery",
   "/recipient",
