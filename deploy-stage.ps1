@@ -288,6 +288,13 @@ try {
         if ($catalogResponse.StatusCode -ne 200) {
             throw "Staging API returned HTTP $($catalogResponse.StatusCode)"
         }
+
+        $publicConfigResponse = Invoke-WebRequest -Uri "https://$ServerDomain/api/public-config" -UseBasicParsing -TimeoutSec 20
+        $publicConfig = $publicConfigResponse.Content | ConvertFrom-Json
+        if ($publicConfig.turnstile.enabled -ne $true -or
+            [string]::IsNullOrWhiteSpace([string]$publicConfig.turnstile.siteKey)) {
+            throw "Staging Turnstile configuration is disabled or incomplete"
+        }
     }
     catch {
         Write-Warning "Server-side smoke tests passed, but this computer could not verify the public URL: $($_.Exception.Message)"

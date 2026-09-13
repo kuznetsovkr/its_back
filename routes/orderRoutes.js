@@ -39,6 +39,10 @@ const {
 } = require("../services/orderPricing");
 const { getPricingConfig } = require("../services/pricingConfig");
 const {
+  TurnstileVerificationError,
+  verifyTurnstileToken,
+} = require("../services/turnstileVerification");
+const {
   ORDER_UPLOAD_DIR,
   cleanupTemporaryFilesAfterResponse,
   inspectStoredImage,
@@ -90,7 +94,13 @@ router.post(
       deliveryAddress,
       cdekMode,
       cdekAddress,
+      turnstileToken,
     } = validated;
+
+    await verifyTurnstileToken({
+      token: turnstileToken,
+      remoteIp: req.ip,
+    });
 
     // 5) Проверяем наличие на складе
     const inv = await findInventoryForOrder(productType, color, size);
@@ -240,7 +250,8 @@ router.post(
     if (
       error instanceof PricingError ||
       error instanceof ReservationError ||
-      error instanceof RequestValidationError
+      error instanceof RequestValidationError ||
+      error instanceof TurnstileVerificationError
     ) {
       return res.status(error.statusCode).json({
         message: error.message,

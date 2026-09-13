@@ -200,6 +200,8 @@ smoke_test() {
   for attempt in $(seq 1 15); do
     if sudo systemctl is-active --quiet its-stage \
       && curl -fsS --max-time 10 -o /dev/null "http://127.0.0.1:5000/api/clothing-types" \
+      && curl -fsS --max-time 10 "http://127.0.0.1:5000/api/public-config" \
+        | grep -Eq '"enabled":true,"siteKey":"[^"]{20,}"' \
       && curl -fsS --max-time 10 "https://$domain/" | grep -Eq '<title>[^<]+</title>' \
       && curl -fsS --max-time 10 -o /dev/null "https://$domain/order" \
       && [[ "$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' "https://$domain/payment")" == "404" ]] \

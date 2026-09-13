@@ -14,6 +14,7 @@ const pricingRoutes = require("./routes/pricingRoutes");
 const uploadRoutes = require("./routes/uploadRoutes");
 const fileRoutes = require("./routes/fileRoutes");
 const colorsRouter = require("./routes/colors");
+const publicConfigRoutes = require("./routes/publicConfigRoutes");
 const { checkAllAndNotify, checkItemAndNotify } = require("./services/lowStockMonitor");
 const { releaseExpiredReservations } = require("./services/inventoryReservations");
 const { retryPendingCdekShipments } = require("./services/cdekShipments");
@@ -72,6 +73,7 @@ app.use(handleCorsError);
 app.use(express.json({ limit: "64kb", strict: true }));
 
 app.use("/api/auth", authRoutes);
+app.use("/api/public-config", publicConfigRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/inventory", inventoryRoutes);
 app.use("/api/clothing-types", clothingTypeRoutes);

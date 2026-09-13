@@ -38,6 +38,28 @@ const isHttpsUrl = (value) => {
   }
 };
 
+const TURNSTILE_TEST_SITE_KEYS = new Set([
+  "1x00000000000000000000AA",
+  "2x00000000000000000000AB",
+  "1x00000000000000000000BB",
+  "2x00000000000000000000BB",
+  "3x00000000000000000000FF",
+]);
+const TURNSTILE_TEST_SECRET_KEYS = new Set([
+  "1x0000000000000000000000000000000AA",
+  "2x0000000000000000000000000000000AA",
+  "3x0000000000000000000000000000000AA",
+]);
+
+const parseTurnstileHostnames = (value) => String(value || "")
+  .split(",")
+  .map((hostname) => hostname.trim().toLowerCase().replace(/\.$/, ""))
+  .filter(Boolean);
+
+const isValidHostname = (value) =>
+  value.length <= 253 &&
+  /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/.test(value);
+
 const validateRuntimeConfig = (env = process.env) => {
   if (env.NODE_ENV !== "production") {
     return { validated: false, mode: env.NODE_ENV || "development" };
@@ -65,6 +87,9 @@ const validateRuntimeConfig = (env = process.env) => {
     "PAYKEEPER_LOGIN",
     "PAYKEEPER_PASSWORD",
     "PAYKEEPER_SECRET_SEED",
+    "TURNSTILE_SITE_KEY",
+    "TURNSTILE_SECRET_KEY",
+    "TURNSTILE_EXPECTED_HOSTNAMES",
   ].forEach(requireValue);
 
   if (!isHttpsOrigin(env.PUBLIC_APP_URL)) {
@@ -95,6 +120,32 @@ const validateRuntimeConfig = (env = process.env) => {
   }
   if (byteLength(env.PAYKEEPER_SECRET_SEED) < 16) {
     errors.push("PAYKEEPER_SECRET_SEED must contain at least 16 bytes");
+  }
+  if (byteLength(env.TURNSTILE_SITE_KEY) < 20 || byteLength(env.TURNSTILE_SITE_KEY) > 128) {
+    errors.push("TURNSTILE_SITE_KEY must contain between 20 and 128 bytes");
+  }
+  if (byteLength(env.TURNSTILE_SECRET_KEY) < 20 || byteLength(env.TURNSTILE_SECRET_KEY) > 128) {
+    errors.push("TURNSTILE_SECRET_KEY must contain between 20 and 128 bytes");
+  }
+  if (TURNSTILE_TEST_SITE_KEYS.has(String(env.TURNSTILE_SITE_KEY || ""))) {
+    errors.push("TURNSTILE_SITE_KEY must not use a Cloudflare test credential in production");
+  }
+  if (TURNSTILE_TEST_SECRET_KEYS.has(String(env.TURNSTILE_SECRET_KEY || ""))) {
+    errors.push("TURNSTILE_SECRET_KEY must not use a Cloudflare test credential in production");
+  }
+
+  const turnstileHostnames = parseTurnstileHostnames(env.TURNSTILE_EXPECTED_HOSTNAMES);
+  if (
+    turnstileHostnames.length === 0 ||
+    turnstileHostnames.some((hostname) => !isValidHostname(hostname))
+  ) {
+    errors.push("TURNSTILE_EXPECTED_HOSTNAMES must contain valid comma-separated hostnames");
+  }
+  if (isHttpsOrigin(env.PUBLIC_APP_URL)) {
+    const publicHostname = new URL(env.PUBLIC_APP_URL).hostname.toLowerCase();
+    if (!turnstileHostnames.includes(publicHostname)) {
+      errors.push("TURNSTILE_EXPECTED_HOSTNAMES must include the PUBLIC_APP_URL hostname");
+    }
   }
 
   const adminPhone = String(env.ADMIN_PHONE || "").replace(/\D/g, "");
@@ -127,13 +178,18 @@ const validateRuntimeConfig = (env = process.env) => {
     "ENABLE_SQL_LOGGING",
     "ENABLE_STARTUP_WARNINGS",
     "TRUST_PROXY",
+    "TURNSTILE_ENABLED",
   ]) {
     if (env[name] !== undefined && !["0", "1"].includes(String(env[name]))) {
       errors.push(`${name} must be 0 or 1`);
     }
   }
 
-  for (const name of ["ENABLE_RESERVATION_CRON", "ENABLE_CDEK_RETRY_CRON"]) {
+  for (const name of [
+    "ENABLE_RESERVATION_CRON",
+    "ENABLE_CDEK_RETRY_CRON",
+    "TURNSTILE_ENABLED",
+  ]) {
     if (String(env[name] || "") !== "1") {
       errors.push(`${name} must be enabled in production`);
     }

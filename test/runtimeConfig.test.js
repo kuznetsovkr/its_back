@@ -36,6 +36,10 @@ const validProductionEnv = () => ({
   ENABLE_SQL_LOGGING: "0",
   ENABLE_STARTUP_WARNINGS: "1",
   TRUST_PROXY: "1",
+  TURNSTILE_ENABLED: "1",
+  TURNSTILE_SITE_KEY: "0x4AAAAAAA-real-production-site-key",
+  TURNSTILE_SECRET_KEY: "0x4AAAAAAA-real-production-secret-key",
+  TURNSTILE_EXPECTED_HOSTNAMES: "stage.example.com",
 });
 
 test("development startup does not require production integrations", () => {
@@ -99,6 +103,26 @@ test("critical reservation and shipment workers cannot be disabled in production
     (error) => {
       assert.match(error.message, /ENABLE_RESERVATION_CRON must be enabled/);
       assert.match(error.message, /ENABLE_CDEK_RETRY_CRON must be enabled/);
+      return true;
+    }
+  );
+});
+
+test("production requires real Turnstile credentials for its public hostname", () => {
+  const env = validProductionEnv();
+  env.TURNSTILE_ENABLED = "0";
+  env.TURNSTILE_SITE_KEY = "1x00000000000000000000AA";
+  env.TURNSTILE_SECRET_KEY = "1x0000000000000000000000000000000AA";
+  env.TURNSTILE_EXPECTED_HOSTNAMES = "other.example.com,*.example.com";
+
+  assert.throws(
+    () => validateRuntimeConfig(env),
+    (error) => {
+      assert.match(error.message, /TURNSTILE_ENABLED must be enabled/);
+      assert.match(error.message, /TURNSTILE_SITE_KEY must not use/);
+      assert.match(error.message, /TURNSTILE_SECRET_KEY must not use/);
+      assert.match(error.message, /TURNSTILE_EXPECTED_HOSTNAMES must contain valid/);
+      assert.match(error.message, /must include the PUBLIC_APP_URL hostname/);
       return true;
     }
   );

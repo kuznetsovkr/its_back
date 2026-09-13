@@ -38,6 +38,7 @@ const validOrder = () => ({
   cdekMode: "",
   cdekAddress: "",
   cdekAddressLabel: "",
+  turnstileToken: "turnstile-response-token",
 });
 
 test("order validation normalizes trusted values and rejects client price fields", () => {
@@ -46,6 +47,7 @@ test("order validation normalizes trusted values and rejects client price fields
   assert.equal(validated.recipientPhone, "+79991234567");
   assert.equal(validated.embroideryType, "Car");
   assert.equal(validated.embroideryTypeRu, "Автомобиль");
+  assert.equal(validated.turnstileToken, "turnstile-response-token");
 
   assert.throws(
     () => validateOrderCreateInput({ ...validOrder(), totalPrice: "1" }, [{}]),
