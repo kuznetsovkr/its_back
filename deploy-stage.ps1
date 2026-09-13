@@ -170,6 +170,9 @@ try {
     Invoke-NativeCommand -FilePath "npm.cmd" -Arguments @("test") -WorkingDirectory $FrontendRoot
     Invoke-NativeCommand -FilePath "npm.cmd" -Arguments @("test") -WorkingDirectory $BackendRoot
 
+    Write-Step "Running browser end-to-end tests"
+    Invoke-NativeCommand -FilePath "npm.cmd" -Arguments @("run", "test:e2e") -WorkingDirectory $FrontendRoot
+
     Write-Step "Building frontend for staging"
     $buildVariables = @(
         "VITE_API_URL",

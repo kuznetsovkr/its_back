@@ -1,5 +1,18 @@
 # ITS staging operations
 
+## Browser tests before deployment
+
+The staging deploy script runs the frontend Playwright suite before creating
+or uploading a release. On a new workstation, install its Chromium runtime
+once:
+
+```powershell
+npm --prefix .\its_prototype run test:e2e:install
+```
+
+The suite uses the isolated frontend demo mode: it does not create real
+orders, reserve stock, contact CDEK, or open PayKeeper.
+
 ## PostgreSQL and uploads backups
 
 The application timer creates restorable PostgreSQL dumps and compressed
@@ -34,6 +47,25 @@ operations scripts:
 ```bash
 sudo bash /srv/its/current/backend/scripts/install-stage-operations.sh --send-test
 ```
+
+Infrastructure alerts should use a dedicated Telegram bot. The installer
+creates `/etc/its-site/monitor.env` as `root:root` with mode `600`; edit it
+with `sudoedit` and set:
+
+```text
+ITS_MONITOR_TELEGRAM_BOT_TOKEN=<token from BotFather>
+ITS_MONITOR_TELEGRAM_CHAT_IDS=<administrator chat ID>
+```
+
+Open the new bot and press `/start` before sending the first test. Apply and
+verify the configuration without restarting the storefront:
+
+```bash
+sudo bash /srv/its/current/backend/scripts/install-stage-operations.sh --send-test
+```
+
+While the dedicated token is empty, the monitor deliberately keeps the
+existing orders-bot fallback so infrastructure checks do not go silent.
 
 The monitor runs every five minutes and checks the public home page and API,
 the Node.js, nginx, PostgreSQL and Redis services, disk and inode usage, backup

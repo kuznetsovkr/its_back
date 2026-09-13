@@ -11,6 +11,7 @@ fi
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 project_dir="$(cd -- "$script_dir/.." && pwd -P)"
 state_dir="/var/lib/its-stage-monitor"
+monitor_environment="/etc/its-site/monitor.env"
 
 required_files=(
   "$project_dir/scripts/monitor-stage.sh"
@@ -20,6 +21,7 @@ required_files=(
   "$project_dir/deploy/its-stage-monitor.timer"
   "$project_dir/deploy/its-stage-maintenance.service"
   "$project_dir/deploy/its-stage-maintenance.timer"
+  "$project_dir/deploy/monitor.env.example"
 )
 for source_file in "${required_files[@]}"; do
   if [[ ! -f "$source_file" ]]; then
@@ -36,6 +38,20 @@ done
 node --check "$project_dir/scripts/cleanup-order-uploads.js"
 
 install -d -o root -g root -m 0700 -- "$state_dir"
+if [[ -L "$monitor_environment" || (-e "$monitor_environment" && ! -f "$monitor_environment") ]]; then
+  echo "Monitoring environment must be a regular file: $monitor_environment" >&2
+  exit 65
+fi
+if [[ ! -e "$monitor_environment" ]]; then
+  install -d -o root -g root -m 0755 -- "$(dirname -- "$monitor_environment")"
+  install -o root -g root -m 0600 \
+    "$project_dir/deploy/monitor.env.example" \
+    "$monitor_environment"
+  echo "Created $monitor_environment; add the dedicated bot token before testing it"
+else
+  chown root:root -- "$monitor_environment"
+  chmod 0600 -- "$monitor_environment"
+fi
 install -o root -g root -m 0750 \
   "$project_dir/scripts/monitor-stage.sh" \
   /usr/local/sbin/its-stage-monitor
@@ -59,8 +75,8 @@ run_monitor_action() {
   local action="$1"
   local unit_name="its-stage-monitor-setup-$$-${action#--}"
   local properties=(--property=Type=oneshot --property=EnvironmentFile=/etc/its-site/stage.env)
-  if [[ -f /etc/its-site/monitor.env ]]; then
-    properties+=(--property=EnvironmentFile=/etc/its-site/monitor.env)
+  if [[ -f "$monitor_environment" ]]; then
+    properties+=(--property=EnvironmentFile="$monitor_environment")
   fi
   systemd-run \
     --quiet \
