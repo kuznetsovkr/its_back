@@ -2,11 +2,10 @@ const axios = require("axios");
 const { getCdekRequestContext } = require("./cdekClient");
 
 const DEFAULT_CDEK_TARIFF_CODE = 136;
-
-const GOODS_PRESETS = Object.freeze({
-  hoodie: Object.freeze({ width: 35, height: 35, length: 7, weight: 800 }),
-  svitshot: Object.freeze({ width: 35, height: 35, length: 7, weight: 800 }),
-  tshirt: Object.freeze({ width: 30, height: 20, length: 3, weight: 300 }),
+const PRICE_FIELD_BY_EMBROIDERY = Object.freeze({
+  Patronus: "patronusPrice",
+  Car: "carPrice",
+  petFace: "petFacePrice",
 });
 
 class PricingError extends Error {
@@ -25,29 +24,9 @@ const normalizeText = (value) =>
     .replaceAll("ё", "е")
     .replace(/\s+/g, " ");
 
-const resolveClothingKey = (inventory) => {
-  const name = normalizeText(inventory?.clothingType?.name || inventory?.productType);
-
-  if (name.includes("худи") || name.includes("hoodie") || name.includes("hudi")) {
-    return "hoodie";
-  }
-  if (
-    name.includes("свитшот") ||
-    name.includes("свит") ||
-    name.includes("sweatshirt") ||
-    name.includes("svitshot")
-  ) {
-    return "svitshot";
-  }
-  if (
-    name.includes("футбол") ||
-    name.includes("t-shirt") ||
-    name.includes("tshirt") ||
-    name.includes("tee")
-  ) {
-    return "tshirt";
-  }
-
+const getClothingProfile = (inventory) => {
+  const profile = inventory?.clothingType;
+  if (profile?.code) return profile;
   throw new PricingError("Для выбранного изделия цена не настроена", 422, "unknown_clothing_type");
 };
 
@@ -80,13 +59,13 @@ const calculateMerchandisePrice = ({
     return {
       manual: true,
       merchandisePrice: null,
-      clothingKey: resolveClothingKey(inventory),
+      clothingTypeCode: getClothingProfile(inventory).code,
       embroideryType: normalizedType,
     };
   }
 
-  const clothingKey = resolveClothingKey(inventory);
-  const basePrice = pricingConfig?.matrix?.[normalizedType]?.[clothingKey];
+  const clothingProfile = getClothingProfile(inventory);
+  const basePrice = clothingProfile[PRICE_FIELD_BY_EMBROIDERY[normalizedType]];
   if (!Number.isInteger(basePrice) || basePrice <= 0) {
     throw new PricingError("Для выбранной комбинации цена не настроена", 422, "price_not_configured");
   }
@@ -94,7 +73,10 @@ const calculateMerchandisePrice = ({
   let merchandisePrice = basePrice;
   if (normalizedType === "Patronus") {
     const count = parseCount(patronusCount, "patronusCount");
-    const limit = clothingKey === "tshirt" ? 1 : 5;
+    const limit = Number(clothingProfile.patronusLimit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 5) {
+      throw new PricingError("Лимит патронусов для изделия не настроен", 500, "invalid_clothing_profile");
+    }
     if (count > limit) {
       throw new PricingError(`Для выбранного изделия доступно не более ${limit} патронусов`);
     }
@@ -120,7 +102,7 @@ const calculateMerchandisePrice = ({
   return {
     manual: false,
     merchandisePrice,
-    clothingKey,
+    clothingTypeCode: clothingProfile.code,
     embroideryType: normalizedType,
   };
 };
@@ -149,17 +131,6 @@ const getPriceCatalog = ({ inventory, patronusCount = 1, petFaceCount = 1, prici
   }).merchandisePrice,
 });
 
-const getStartingPrice = (inventory, pricingConfig) => {
-  const clothingKey = resolveClothingKey(inventory);
-  const prices = ["Patronus", "Car", "petFace"]
-    .map((type) => pricingConfig?.matrix?.[type]?.[clothingKey])
-    .filter((price) => Number.isInteger(price) && price > 0);
-  if (!prices.length) {
-    throw new PricingError("Для выбранного изделия цена не настроена", 422, "price_not_configured");
-  }
-  return Math.min(...prices);
-};
-
 const getCdekTariffCode = () => {
   const code = Number(process.env.CDEK_CHECKOUT_TARIFF_CODE || DEFAULT_CDEK_TARIFF_CODE);
   if (!Number.isInteger(code) || code <= 0) {
@@ -180,15 +151,42 @@ const getCdekFromLocation = () => {
   };
 };
 
+const readFiniteEnv = (name, fallback) => {
+  const value = Number(process.env[name] ?? fallback);
+  return Number.isFinite(value) ? value : fallback;
+};
+
+const getPublicCdekConfig = () => ({
+  tariffCode: getCdekTariffCode(),
+  from: {
+    ...getCdekFromLocation(),
+    city: String(process.env.CDEK_FROM_CITY || "Красноярск"),
+    address: String(process.env.CDEK_FROM_ADDRESS || ""),
+  },
+  defaultLocation: [
+    readFiniteEnv("CDEK_FROM_LONGITUDE", 92.868),
+    readFiniteEnv("CDEK_FROM_LATITUDE", 56.0106),
+  ],
+  defaultZoom: readFiniteEnv("CDEK_DEFAULT_ZOOM", 10),
+});
+
 const getGoodsPreset = (inventory) => {
-  const clothingKey = resolveClothingKey(inventory);
-  const preset = GOODS_PRESETS[clothingKey];
+  const profile = getClothingProfile(inventory);
+  const values = {
+    width: Number(profile.packageWidth),
+    height: Number(profile.packageHeight),
+    length: Number(profile.packageLength),
+    weight: Number(profile.packageWeight),
+  };
+  if (Object.values(values).some((value) => !Number.isInteger(value) || value <= 0)) {
+    throw new PricingError("Габариты отправления для изделия не настроены", 500, "invalid_clothing_profile");
+  }
   return {
     number: "1",
-    weight: preset.weight,
-    length: preset.length,
-    width: preset.width,
-    height: preset.height,
+    weight: values.weight,
+    length: values.length,
+    width: values.width,
+    height: values.height,
   };
 };
 
@@ -277,7 +275,6 @@ module.exports = {
   getCdekFromLocation,
   getCdekTariffCode,
   getGoodsPreset,
+  getPublicCdekConfig,
   getPriceCatalog,
-  getStartingPrice,
-  resolveClothingKey,
 };

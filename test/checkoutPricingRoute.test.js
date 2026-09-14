@@ -12,6 +12,17 @@ mockModule("../services/inventoryResolver", {
     id: 1,
     productType: "Худи",
     quantity: 3,
+    clothingType: {
+      code: "hoodie",
+      patronusLimit: 5,
+      patronusPrice: 10000,
+      carPrice: 8500,
+      petFacePrice: 8000,
+      packageWidth: 35,
+      packageHeight: 35,
+      packageLength: 7,
+      packageWeight: 800,
+    },
   }),
 });
 mockModule("../services/orderPricing", {
@@ -19,14 +30,8 @@ mockModule("../services/orderPricing", {
   calculateCdekDelivery: async () => ({ deliveryPrice: 742 }),
 });
 mockModule("../services/pricingConfig", {
-  getPricingConfig: async () => ({
-    matrix: {
-      Patronus: { tshirt: 8500, svitshot: 9500, hoodie: 10000 },
-      Car: { tshirt: 6500, svitshot: 8000, hoodie: 8500 },
-      petFace: { tshirt: 6000, svitshot: 7000, hoodie: 8000 },
-    },
-    additional: { Patronus: 5000, petFace: 2000 },
-  }),
+  getPricingConfig: async () => ({}),
+  getPricingExtras: async () => ({ Patronus: 5000, petFace: 2000 }),
   updatePricingConfig: async () => {},
 });
 

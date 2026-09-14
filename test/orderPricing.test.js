@@ -9,20 +9,35 @@ const {
   getPriceCatalog,
 } = require("../services/orderPricing");
 
-const inventory = (productType) => ({ productType });
-const pricingConfig = {
-  matrix: {
-    Patronus: { tshirt: 8500, svitshot: 9500, hoodie: 10000 },
-    Car: { tshirt: 6500, svitshot: 8000, hoodie: 8500 },
-    petFace: { tshirt: 6000, svitshot: 7000, hoodie: 8000 },
+const profiles = {
+  tshirt: {
+    code: "tshirt", patronusLimit: 1,
+    patronusPrice: 8500, carPrice: 6500, petFacePrice: 6000,
+    packageWidth: 30, packageHeight: 20, packageLength: 3, packageWeight: 300,
   },
+  svitshot: {
+    code: "svitshot", patronusLimit: 5,
+    patronusPrice: 9500, carPrice: 8000, petFacePrice: 7000,
+    packageWidth: 35, packageHeight: 35, packageLength: 7, packageWeight: 800,
+  },
+  hoodie: {
+    code: "hoodie", patronusLimit: 5,
+    patronusPrice: 10000, carPrice: 8500, petFacePrice: 8000,
+    packageWidth: 35, packageHeight: 35, packageLength: 7, packageWeight: 800,
+  },
+};
+const inventory = (key, overrides = {}) => ({
+  productType: key,
+  clothingType: { ...profiles[key], ...overrides },
+});
+const pricingConfig = {
   additional: { Patronus: 5000, petFace: 2000 },
 };
 
 test("сервер рассчитывает каталог цен для выбранного изделия", () => {
   assert.deepEqual(
     getPriceCatalog({
-      inventory: inventory("Худи"),
+      inventory: inventory("hoodie"),
       patronusCount: 2,
       petFaceCount: 3,
       pricingConfig,
@@ -35,32 +50,44 @@ test("сервер рассчитывает каталог цен для выб�
   );
 });
 
-test("расчёт использует переданную серверную конфигурацию без скрытых констант", () => {
+test("расчёт использует профиль изделия и серверные доплаты без скрытых констант", () => {
   const changedConfig = {
-    matrix: {
-      ...pricingConfig.matrix,
-      Car: { ...pricingConfig.matrix.Car, hoodie: 12345 },
-    },
     additional: { ...pricingConfig.additional, Patronus: 777 },
   };
 
   assert.equal(calculateMerchandisePrice({
-    inventory: inventory("Худи"),
+    inventory: inventory("hoodie", { carPrice: 12345 }),
     embroideryType: "Car",
     pricingConfig: changedConfig,
   }).merchandisePrice, 12345);
   assert.equal(calculateMerchandisePrice({
-    inventory: inventory("Худи"),
+    inventory: inventory("hoodie"),
     embroideryType: "Patronus",
     patronusCount: 2,
     pricingConfig: changedConfig,
   }).merchandisePrice, 10777);
 });
 
+test("расчёт не определяет профиль изделия по его названию", () => {
+  const arbitraryInventory = {
+    productType: "Любое новое название",
+    clothingType: {
+      ...profiles.hoodie,
+      code: "custom-garment",
+      carPrice: 4321,
+    },
+  };
+  assert.equal(calculateMerchandisePrice({
+    inventory: arbitraryInventory,
+    embroideryType: "Car",
+    pricingConfig,
+  }).merchandisePrice, 4321);
+});
+
 test("сервер отклоняет недопустимое количество вышивок", () => {
   assert.throws(
     () => calculateMerchandisePrice({
-      inventory: inventory("Футболка"),
+      inventory: inventory("tshirt"),
       embroideryType: "Patronus",
       patronusCount: 2,
       pricingConfig,
@@ -72,14 +99,14 @@ test("сервер отклоняет недопустимое количест�
 test("индивидуальная вышивка переводит заказ на ручной расчёт", () => {
   assert.deepEqual(
     calculateMerchandisePrice({
-      inventory: inventory("Свитшот"),
+      inventory: inventory("svitshot"),
       embroideryType: "custom",
       pricingConfig,
     }),
     {
       manual: true,
       merchandisePrice: null,
-      clothingKey: "svitshot",
+      clothingTypeCode: "svitshot",
       embroideryType: "custom",
     }
   );
@@ -126,7 +153,7 @@ test("стоимость доставки пересчитывается по д
 
   try {
     const result = await calculateCdekDelivery({
-      inventory: inventory("Худи"),
+      inventory: inventory("hoodie"),
       cdekMode: "office",
       cdekAddress: { code: "KRS1", city_code: 1 },
     });

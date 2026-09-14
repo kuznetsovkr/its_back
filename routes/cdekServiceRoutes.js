@@ -101,7 +101,9 @@ router.post(
         return res.status(400).json({ message: "Unknown action" });
       }
 
-      const payload = buildCdekCalculatePayload(req.body);
+      const { getShippingPackageProfiles } = require("../services/clothingTypes");
+      const packageProfiles = await getShippingPackageProfiles();
+      const payload = buildCdekCalculatePayload(req.body, packageProfiles);
       const { baseUrl, headers } = await getCdekRequestContext();
       const response = await axios.post(`${baseUrl}/calculator/tarifflist`, payload, {
         headers: withWidgetClientHeaders(headers),

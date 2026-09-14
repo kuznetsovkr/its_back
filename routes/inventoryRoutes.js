@@ -2,23 +2,21 @@ const express = require("express");
 const Inventory = require("../models/Inventory");
 const ClothingType = require("../models/ClothingType");
 const requireAdmin = require("../middleware/requireAdmin");
-const { getPricingConfig } = require("../services/pricingConfig");
-const { getStartingPrice } = require("../services/orderPricing");
+const {
+    CLOTHING_TYPE_ATTRIBUTES,
+    serializeClothingType,
+} = require("../services/clothingTypes");
 
 const router = express.Router();
 
-const asPlainWithPrice = (item, pricingConfig) => {
+const asPlainWithPrice = (item) => {
     const plain = item.get({ plain: true });
     const ct = plain.clothingType;
-    let price = null;
-    try {
-        price = getStartingPrice(plain, pricingConfig);
-    } catch {
-        price = null;
-    }
+    const clothingType = ct ? serializeClothingType(ct) : null;
     return {
         ...plain,
-        price,
+        clothingType,
+        price: clothingType?.price ?? null,
         clothingTypeName: ct ? ct.name : null,
     };
 };
@@ -26,13 +24,10 @@ const asPlainWithPrice = (item, pricingConfig) => {
 // Получить весь инвентарь
 router.get("/", async (_req, res) => {
     try {
-        const [inventory, pricingConfig] = await Promise.all([
-            Inventory.findAll({
-                include: [{ model: ClothingType, as: "clothingType", attributes: ["id", "name"] }],
-            }),
-            getPricingConfig(),
-        ]);
-        res.json(inventory.map((item) => asPlainWithPrice(item, pricingConfig)));
+        const inventory = await Inventory.findAll({
+            include: [{ model: ClothingType, as: "clothingType", attributes: CLOTHING_TYPE_ATTRIBUTES }],
+        });
+        res.json(inventory.map(asPlainWithPrice));
     } catch (error) {
         console.error("Ошибка при получении инвентаря:", error);
         res.status(500).json({ message: "Не удалось получить данные" });
@@ -42,10 +37,14 @@ router.get("/", async (_req, res) => {
 // Добавить позицию
 router.post("/", requireAdmin, async (req, res) => {
     try {
-        const { productType, color, colorCode, size, quantity, imageUrl, clothingTypeId } = req.body;
+        const { color, colorCode, size, quantity, imageUrl, clothingTypeId } = req.body;
+        const clothingType = await ClothingType.findByPk(clothingTypeId);
+        if (!clothingType) {
+            return res.status(422).json({ message: "Выберите существующий тип изделия" });
+        }
 
         const newItem = await Inventory.create({
-            productType,
+            productType: clothingType.name,
             color,
             colorCode,
             size,
@@ -55,11 +54,10 @@ router.post("/", requireAdmin, async (req, res) => {
         });
 
         const createdWithPrice = await Inventory.findByPk(newItem.id, {
-            include: [{ model: ClothingType, as: "clothingType", attributes: ["id", "name"] }],
+            include: [{ model: ClothingType, as: "clothingType", attributes: CLOTHING_TYPE_ATTRIBUTES }],
         });
 
-        const pricingConfig = await getPricingConfig();
-        res.json(asPlainWithPrice(createdWithPrice, pricingConfig));
+        res.json(asPlainWithPrice(createdWithPrice));
     } catch (error) {
         console.error("Ошибка при создании инвентаря:", error);
         res.status(500).json({ message: "Не удалось создать запись" });
@@ -69,14 +67,18 @@ router.post("/", requireAdmin, async (req, res) => {
 // Обновить позицию
 router.put("/:id", requireAdmin, async (req, res) => {
     try {
-        const { productType, color, colorCode, quantity, size, imageUrl, clothingTypeId } = req.body;
+        const { color, colorCode, quantity, size, imageUrl, clothingTypeId } = req.body;
         const item = await Inventory.findByPk(req.params.id);
 
         if (!item) {
             return res.status(404).json({ message: "Позиция не найдена" });
         }
+        const clothingType = await ClothingType.findByPk(clothingTypeId);
+        if (!clothingType) {
+            return res.status(422).json({ message: "Выберите существующий тип изделия" });
+        }
 
-        item.productType = productType;
+        item.productType = clothingType.name;
         item.color = color;
         item.colorCode = colorCode;
         item.quantity = quantity;
@@ -86,11 +88,10 @@ router.put("/:id", requireAdmin, async (req, res) => {
         await item.save();
 
         const savedWithPrice = await Inventory.findByPk(item.id, {
-            include: [{ model: ClothingType, as: "clothingType", attributes: ["id", "name"] }],
+            include: [{ model: ClothingType, as: "clothingType", attributes: CLOTHING_TYPE_ATTRIBUTES }],
         });
 
-        const pricingConfig = await getPricingConfig();
-        res.json(asPlainWithPrice(savedWithPrice, pricingConfig));
+        res.json(asPlainWithPrice(savedWithPrice));
     } catch (err) {
         console.error("Ошибка при обновлении инвентаря:", err);
         res.status(500).json({ message: "Не удалось обновить запись" });

@@ -87,7 +87,7 @@ test("order validation enforces bounded counters and the selected custom mode", 
   );
 });
 
-test("public CDEK calculation replaces origin and package data with server presets", () => {
+test("public CDEK calculation replaces origin and uses a package profile from the catalog", () => {
   const payload = buildCdekCalculatePayload({
     action: "calculate",
     currency: 1,
@@ -95,7 +95,7 @@ test("public CDEK calculation replaces origin and package data with server prese
     from_location: { code: 999999 },
     to_location: { code: 44 },
     packages: [{ width: 30, height: 20, length: 3, weight: 0.3 }],
-  });
+  }, [{ width: 30, height: 20, length: 3, weight: 300 }]);
 
   assert.equal(payload.from_location.code, 278);
   assert.equal(payload.to_location.code, 44);
@@ -112,7 +112,7 @@ test("public CDEK calculation replaces origin and package data with server prese
       action: "calculate",
       to_location: { code: 44 },
       packages: [{ width: 1, height: 1, length: 1, weight: 1 }],
-    }),
+    }, [{ width: 30, height: 20, length: 3, weight: 300 }]),
     (error) => error.field === "packages[0]"
   );
 });

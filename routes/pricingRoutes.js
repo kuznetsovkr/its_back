@@ -17,35 +17,66 @@ const {
   readPositiveInteger,
   readString,
 } = require("../lib/requestValidation");
-const { getPricingConfig, updatePricingConfig } = require("../services/pricingConfig");
+const {
+  getPricingConfig,
+  getPricingExtras,
+  updatePricingConfig,
+} = require("../services/pricingConfig");
 
 const router = express.Router();
+const SIZE_GUIDE_KEYS = new Set(["tshirt", "hoodie", "svitshot"]);
 
 const readPricingConfig = (body) => {
   const config = ensurePlainObject(body, "body");
-  assertAllowedKeys(config, new Set(["matrix", "additional"]), "настройках цен");
-  const matrix = ensurePlainObject(config.matrix, "matrix");
-  assertAllowedKeys(matrix, new Set(["Patronus", "Car", "petFace"]), "матрице цен");
+  assertAllowedKeys(config, new Set(["types", "additional"]), "настройках цен");
+  if (!Array.isArray(config.types) || config.types.length > 100) {
+    throw new RequestValidationError("Поле types должно быть массивом не более чем из 100 элементов", "types");
+  }
 
-  const readRow = (type) => {
-    const row = ensurePlainObject(matrix[type], `matrix.${type}`);
-    assertAllowedKeys(row, new Set(["tshirt", "svitshot", "hoodie"]), `matrix.${type}`);
+  const types = config.types.map((rawType, index) => {
+    const field = `types[${index}]`;
+    const type = ensurePlainObject(rawType, field);
+    assertAllowedKeys(
+      type,
+      new Set(["id", "displayOrder", "sizeGuideKey", "patronusLimit", "prices", "package"]),
+      field
+    );
+    const prices = ensurePlainObject(type.prices, `${field}.prices`);
+    assertAllowedKeys(prices, new Set(["Patronus", "Car", "petFace"]), `${field}.prices`);
+    const packageProfile = ensurePlainObject(type.package, `${field}.package`);
+    assertAllowedKeys(
+      packageProfile,
+      new Set(["width", "height", "length", "weight"]),
+      `${field}.package`
+    );
+    const sizeGuideKey = readString(type.sizeGuideKey, `${field}.sizeGuideKey`, { max: 32 }) || null;
+    if (sizeGuideKey && !SIZE_GUIDE_KEYS.has(sizeGuideKey)) {
+      throw new RequestValidationError("Неизвестная таблица размеров", `${field}.sizeGuideKey`);
+    }
     return {
-      tshirt: readPositiveInteger(row.tshirt, `matrix.${type}.tshirt`, { max: 1_000_000 }),
-      svitshot: readPositiveInteger(row.svitshot, `matrix.${type}.svitshot`, { max: 1_000_000 }),
-      hoodie: readPositiveInteger(row.hoodie, `matrix.${type}.hoodie`, { max: 1_000_000 }),
+      id: readPositiveInteger(type.id, `${field}.id`, { max: 1_000_000 }),
+      displayOrder: readPositiveInteger(type.displayOrder, `${field}.displayOrder`, { max: 10_000 }),
+      sizeGuideKey,
+      patronusLimit: readPositiveInteger(type.patronusLimit, `${field}.patronusLimit`, { max: 5 }),
+      prices: {
+        Patronus: readPositiveInteger(prices.Patronus, `${field}.prices.Patronus`, { max: 1_000_000 }),
+        Car: readPositiveInteger(prices.Car, `${field}.prices.Car`, { max: 1_000_000 }),
+        petFace: readPositiveInteger(prices.petFace, `${field}.prices.petFace`, { max: 1_000_000 }),
+      },
+      package: {
+        width: readPositiveInteger(packageProfile.width, `${field}.package.width`, { max: 300 }),
+        height: readPositiveInteger(packageProfile.height, `${field}.package.height`, { max: 300 }),
+        length: readPositiveInteger(packageProfile.length, `${field}.package.length`, { max: 300 }),
+        weight: readPositiveInteger(packageProfile.weight, `${field}.package.weight`, { max: 100_000 }),
+      },
     };
-  };
+  });
 
   const additional = ensurePlainObject(config.additional, "additional");
   assertAllowedKeys(additional, new Set(["Patronus", "petFace"]), "доплатах");
   return {
     currency: "RUB",
-    matrix: {
-      Patronus: readRow("Patronus"),
-      Car: readRow("Car"),
-      petFace: readRow("petFace"),
-    },
+    types,
     additional: {
       Patronus: readPositiveInteger(additional.Patronus, "additional.Patronus", {
         min: 0,
@@ -75,7 +106,7 @@ router.put("/config", requireAdmin, async (req, res) => {
     }
     return res.json(await updatePricingConfig(readPricingConfig(req.body)));
   } catch (error) {
-    if (error instanceof RequestValidationError) {
+    if (error instanceof RequestValidationError || error.statusCode) {
       return res.status(error.statusCode).json({
         message: error.message,
         code: error.code,
@@ -112,7 +143,7 @@ router.post("/quote", requireTrustedOrigin, pricingQuoteRateLimit, async (req, r
       return res.status(409).json({ message: "Товара нет в наличии" });
     }
 
-    const pricingConfig = await getPricingConfig();
+    const pricingConfig = { additional: await getPricingExtras() };
 
     return res.json({
       currency: "RUB",
@@ -172,7 +203,7 @@ router.post("/checkout", requireTrustedOrigin, pricingQuoteRateLimit, async (req
       return res.status(409).json({ message: "Товара нет в наличии" });
     }
 
-    const pricingConfig = await getPricingConfig();
+    const pricingConfig = { additional: await getPricingExtras() };
     const merchandiseQuote = calculateMerchandisePrice({
       inventory,
       embroideryType,

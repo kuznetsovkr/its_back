@@ -1,4 +1,5 @@
 require("dotenv").config();
+const assert = require("node:assert/strict");
 const { spawnSync } = require("node:child_process");
 const { Sequelize } = require("sequelize");
 
@@ -84,13 +85,79 @@ const assertExpectedTables = (actual) => {
   }
 };
 
+const seedLegacyCatalog = async () => {
+  const verification = new Sequelize(
+    testDatabaseName,
+    process.env.DB_USER,
+    process.env.DB_PASSWORD,
+    connectionOptions
+  );
+  try {
+    const now = new Date();
+    await verification.getQueryInterface().bulkInsert("clothingTypes", [
+      { name: "Футболка", createdAt: now, updatedAt: now },
+      { name: "Худи", createdAt: now, updatedAt: now },
+      { name: "Свитшот", createdAt: now, updatedAt: now },
+      { name: "Куртка", createdAt: now, updatedAt: now },
+    ]);
+    await verification.getQueryInterface().bulkUpdate("pricing_configs", {
+      patronusTshirtPrice: 1111,
+      patronusSvitshotPrice: 2222,
+      patronusHoodiePrice: 3333,
+      carTshirtPrice: 4444,
+      carSvitshotPrice: 5555,
+      carHoodiePrice: 6666,
+      petFaceTshirtPrice: 7777,
+      petFaceSvitshotPrice: 8888,
+      petFaceHoodiePrice: 9999,
+    }, { id: 1 });
+  } finally {
+    await verification.close();
+  }
+};
+
+const assertCatalogProfilesMigrated = async () => {
+  const verification = new Sequelize(
+    testDatabaseName,
+    process.env.DB_USER,
+    process.env.DB_PASSWORD,
+    connectionOptions
+  );
+  try {
+    const types = await verification.query(
+      `SELECT * FROM "clothingTypes" ORDER BY "id" ASC`,
+      { type: Sequelize.QueryTypes.SELECT }
+    );
+    const byCode = new Map(types.map((type) => [type.code, type]));
+    assert.equal(byCode.get("tshirt").patronusPrice, 1111);
+    assert.equal(byCode.get("tshirt").packageWeight, 300);
+    assert.equal(byCode.get("tshirt").patronusLimit, 1);
+    assert.equal(byCode.get("svitshot").carPrice, 5555);
+    assert.equal(byCode.get("hoodie").petFacePrice, 9999);
+
+    const unknownType = types.find((type) => type.name === "Куртка");
+    assert.match(unknownType.code, /^type-\d+$/);
+    assert.equal(unknownType.patronusPrice, null);
+    assert.equal(unknownType.sizeGuideKey, null);
+
+    const pricingColumns = await verification.getQueryInterface().describeTable("pricing_configs");
+    assert.equal(pricingColumns.patronusTshirtPrice, undefined);
+    assert.ok(pricingColumns.additionalPatronusPrice);
+  } finally {
+    await verification.close();
+  }
+};
+
 const run = async () => {
   await admin.authenticate();
   await admin.query(`CREATE DATABASE ${quoteDatabaseName(testDatabaseName)}`);
   console.log(`[migration-test] Created ${testDatabaseName}`);
 
+  runCli(["db:migrate", "--to", "20260912000200-centralize-pricing-config.js"]);
+  await seedLegacyCatalog();
   runCli(["db:migrate"]);
   assertExpectedTables(await getApplicationTables());
+  await assertCatalogProfilesMigrated();
 
   runCli(["db:migrate:undo:all"]);
   const tablesAfterRollback = await getApplicationTables();

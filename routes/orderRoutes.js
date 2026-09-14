@@ -37,7 +37,7 @@ const {
   calculateCdekDelivery,
   calculateMerchandisePrice,
 } = require("../services/orderPricing");
-const { getPricingConfig } = require("../services/pricingConfig");
+const { getPricingExtras } = require("../services/pricingConfig");
 const {
   TurnstileVerificationError,
   verifyTurnstileToken,
@@ -108,7 +108,7 @@ router.post(
       console.error("[CREATE] inventory NOT FOUND for:", productType, color, size);
       return res.status(400).json({ message: "Комбинация товара на складе не найдена" });
     }
-    const pricingConfig = await getPricingConfig();
+    const pricingConfig = { additional: await getPricingExtras() };
     const merchandiseQuote = calculateMerchandisePrice({
       inventory: inv,
       embroideryType,

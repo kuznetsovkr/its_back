@@ -9,7 +9,16 @@ const {
 test("CDEK shipment payload charges nothing on delivery and uses server parcel data", () => {
   const payload = buildCdekOrderPayload({
     order: { id: 77, productType: "Футболка" },
-    inventory: { productType: "Футболка" },
+    inventory: {
+      productType: "Футболка",
+      clothingType: {
+        code: "tshirt",
+        packageWidth: 30,
+        packageHeight: 20,
+        packageLength: 3,
+        packageWeight: 300,
+      },
+    },
     shipment: {
       tariffCode: 136,
       deliveryPoint: "MSK123",

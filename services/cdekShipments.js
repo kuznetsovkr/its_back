@@ -55,7 +55,10 @@ const claimShipment = async (orderId) =>
     });
     if (!order || order.paymentStatus !== "paid") return { skip: "not_paid", shipment };
 
-    const inventory = await Inventory.findByPk(order.inventoryId, { transaction });
+    const inventory = await Inventory.findByPk(order.inventoryId, {
+      transaction,
+      include: [{ association: "clothingType" }],
+    });
     if (!inventory) throw new Error("Inventory for CDEK shipment not found");
 
     shipment.status = "processing";

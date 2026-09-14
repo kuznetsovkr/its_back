@@ -1,9 +1,10 @@
 const { Op } = require("sequelize");
 const Inventory = require("../models/Inventory");
 const ClothingType = require("../models/ClothingType");
+const { CLOTHING_TYPE_ATTRIBUTES } = require("./clothingTypes");
 
 const withClothingType = {
-  include: [{ model: ClothingType, as: "clothingType", attributes: ["id", "name"] }],
+  include: [{ model: ClothingType, as: "clothingType", attributes: CLOTHING_TYPE_ATTRIBUTES }],
 };
 
 async function findInventoryForOrder(productType, color, size) {
