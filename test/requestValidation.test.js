@@ -74,12 +74,15 @@ test("order validation enforces bounded counters and the selected custom mode", 
   assert.equal(validated.recipientFullName, "Иванов Иван");
   assert.equal(validated.preferredContact, "telegram");
 
+  const comicSans = validateOrderCreateInput({ ...custom, customTextFont: "Comic Sans MS" }, []);
+  assert.equal(comicSans.customTextFont, "Comic Sans MS");
+
   assert.throws(
     () => validateOrderCreateInput({ ...custom, customOption: "{}" }, []),
     (error) => error.field === "customOption"
   );
   assert.throws(
-    () => validateOrderCreateInput({ ...custom, customTextFont: "Comic Sans MS" }, []),
+    () => validateOrderCreateInput({ ...custom, customTextFont: "Unsupported Font" }, []),
     (error) => error.field === "customTextFont"
   );
 });
