@@ -61,6 +61,81 @@ function Invoke-NativeCommand {
     }
 }
 
+function Send-ChunkedFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter(Mandatory = $true)][string]$RemotePath,
+        [Parameter(Mandatory = $true)][string]$RemoteChunkPrefix,
+        [Parameter(Mandatory = $true)][string]$RemoteTarget,
+        [Parameter(Mandatory = $true)][string[]]$SshOptions,
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory,
+        [int]$ChunkSizeBytes = 8MB
+    )
+
+    $cleanupCommand = "rm -f -- $RemotePath ${RemoteChunkPrefix}*"
+    Invoke-NativeCommand -FilePath "ssh.exe" -Arguments ($SshOptions + @(
+        $RemoteTarget, $cleanupCommand
+    )) -WorkingDirectory $WorkingDirectory
+
+    $inputStream = [IO.File]::OpenRead($FilePath)
+    $buffer = New-Object byte[] $ChunkSizeBytes
+    $chunkIndex = 0
+
+    try {
+        while (($readCount = $inputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            $chunkSuffix = $chunkIndex.ToString("D5")
+            $localChunk = "$FilePath.part-$chunkSuffix"
+            $remoteChunk = "$RemoteChunkPrefix$chunkSuffix"
+            $outputStream = [IO.File]::Create($localChunk)
+
+            try {
+                $outputStream.Write($buffer, 0, $readCount)
+            }
+            finally {
+                $outputStream.Dispose()
+            }
+
+            $uploaded = $false
+            foreach ($attempt in 1..3) {
+                try {
+                    Invoke-NativeCommand -FilePath "scp.exe" -Arguments ($SshOptions + @(
+                        "-O", $localChunk, "${RemoteTarget}:${remoteChunk}"
+                    )) -WorkingDirectory $WorkingDirectory
+                    $uploaded = $true
+                    break
+                }
+                catch {
+                    if ($attempt -eq 3) {
+                        throw
+                    }
+                    Start-Sleep -Seconds $attempt
+                }
+            }
+
+            if (-not $uploaded) {
+                throw "Could not upload chunk $chunkSuffix"
+            }
+
+            [IO.File]::Delete($localChunk)
+            $chunkIndex += 1
+            Start-Sleep -Seconds 1
+        }
+    }
+    finally {
+        $inputStream.Dispose()
+    }
+
+    if ($chunkIndex -eq 0) {
+        throw "Cannot upload an empty file: $FilePath"
+    }
+
+    Write-Host "Uploaded $chunkIndex chunks for $([IO.Path]::GetFileName($FilePath))"
+    $assembleCommand = "cat ${RemoteChunkPrefix}* > $RemotePath && rm -f -- ${RemoteChunkPrefix}*"
+    Invoke-NativeCommand -FilePath "ssh.exe" -Arguments ($SshOptions + @(
+        $RemoteTarget, $assembleCommand
+    )) -WorkingDirectory $WorkingDirectory
+}
+
 function Get-GitOutput {
     param(
         [Parameter(Mandatory = $true)][string]$Repository,
@@ -129,6 +204,7 @@ foreach ($command in @("git.exe", "node.exe", "npm.cmd", "tar.exe", "ssh.exe", "
 $TemporaryDirectory = $null
 $RemoteArtifactsMayExist = $false
 $RemoteFrontendArchive = $null
+$RemoteFrontendChunkPrefix = $null
 $RemoteBackendArchive = $null
 $RemoteHelper = $null
 $SshOptions = @(
@@ -251,18 +327,23 @@ try {
 
     Write-Step "Uploading release to $RemoteTarget"
     $RemoteFrontendArchive = "/home/$SshUser/$ArchivePrefix-frontend.tar.gz"
+    $RemoteFrontendChunkPrefix = "$RemoteFrontendArchive.part-"
     $RemoteBackendArchive = "/home/$SshUser/$ArchivePrefix-backend.tar.gz"
     $RemoteHelper = "/home/$SshUser/$ArchivePrefix-remote.sh"
     $RemoteArtifactsMayExist = $true
 
+    Send-ChunkedFile `
+        -FilePath $FrontendArchive `
+        -RemotePath $RemoteFrontendArchive `
+        -RemoteChunkPrefix $RemoteFrontendChunkPrefix `
+        -RemoteTarget $RemoteTarget `
+        -SshOptions $SshOptions `
+        -WorkingDirectory $WorkspaceRoot
     Invoke-NativeCommand -FilePath "scp.exe" -Arguments ($SshOptions + @(
-        $FrontendArchive, "${RemoteTarget}:${RemoteFrontendArchive}"
+        "-O", $BackendArchive, "${RemoteTarget}:${RemoteBackendArchive}"
     )) -WorkingDirectory $WorkspaceRoot
     Invoke-NativeCommand -FilePath "scp.exe" -Arguments ($SshOptions + @(
-        $BackendArchive, "${RemoteTarget}:${RemoteBackendArchive}"
-    )) -WorkingDirectory $WorkspaceRoot
-    Invoke-NativeCommand -FilePath "scp.exe" -Arguments ($SshOptions + @(
-        $RemoteHelperCopy, "${RemoteTarget}:${RemoteHelper}"
+        "-O", $RemoteHelperCopy, "${RemoteTarget}:${RemoteHelper}"
     )) -WorkingDirectory $WorkspaceRoot
 
     Write-Step "Installing and activating the release"
@@ -306,7 +387,7 @@ try {
 }
 finally {
     if ($RemoteArtifactsMayExist -and $RemoteFrontendArchive -and $RemoteBackendArchive -and $RemoteHelper) {
-        $cleanupCommand = "rm -f -- $RemoteFrontendArchive $RemoteBackendArchive $RemoteHelper"
+        $cleanupCommand = "rm -f -- $RemoteFrontendArchive ${RemoteFrontendChunkPrefix}* $RemoteBackendArchive $RemoteHelper"
         try {
             & ssh.exe @SshOptions $RemoteTarget $cleanupCommand 2>$null | Out-Null
         }
