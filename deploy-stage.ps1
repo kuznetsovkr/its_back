@@ -24,6 +24,8 @@ param(
     [string]$ServerDomain = "stage.its-site.ru",
     [string]$SshUser = "itsdeploy",
     [string]$SshKeyPath = "$env:USERPROFILE\.ssh\its_firstvds_codex",
+    [ValidateRange(0, 60)]
+    [int]$SshConnectionCooldownSeconds = 7,
     [switch]$ValidateOnly
 )
 
@@ -76,6 +78,7 @@ function Send-ChunkedFile {
     Invoke-NativeCommand -FilePath "ssh.exe" -Arguments ($SshOptions + @(
         $RemoteTarget, $cleanupCommand
     )) -WorkingDirectory $WorkingDirectory
+    Start-Sleep -Seconds $SshConnectionCooldownSeconds
 
     $inputStream = [IO.File]::OpenRead($FilePath)
     $buffer = New-Object byte[] $ChunkSizeBytes
@@ -108,7 +111,7 @@ function Send-ChunkedFile {
                     if ($attempt -eq 3) {
                         throw
                     }
-                    Start-Sleep -Seconds $attempt
+                    Start-Sleep -Seconds (10 * $attempt)
                 }
             }
 
@@ -118,7 +121,7 @@ function Send-ChunkedFile {
 
             [IO.File]::Delete($localChunk)
             $chunkIndex += 1
-            Start-Sleep -Seconds 1
+            Start-Sleep -Seconds $SshConnectionCooldownSeconds
         }
     }
     finally {
@@ -134,6 +137,7 @@ function Send-ChunkedFile {
     Invoke-NativeCommand -FilePath "ssh.exe" -Arguments ($SshOptions + @(
         $RemoteTarget, $assembleCommand
     )) -WorkingDirectory $WorkingDirectory
+    Start-Sleep -Seconds $SshConnectionCooldownSeconds
 }
 
 function Get-GitOutput {
@@ -342,9 +346,11 @@ try {
     Invoke-NativeCommand -FilePath "scp.exe" -Arguments ($SshOptions + @(
         "-O", $BackendArchive, "${RemoteTarget}:${RemoteBackendArchive}"
     )) -WorkingDirectory $WorkspaceRoot
+    Start-Sleep -Seconds $SshConnectionCooldownSeconds
     Invoke-NativeCommand -FilePath "scp.exe" -Arguments ($SshOptions + @(
         "-O", $RemoteHelperCopy, "${RemoteTarget}:${RemoteHelper}"
     )) -WorkingDirectory $WorkspaceRoot
+    Start-Sleep -Seconds $SshConnectionCooldownSeconds
 
     Write-Step "Installing and activating the release"
     $RemoteCommand = "bash $RemoteHelper $ReleaseId $FrontendHash $BackendHash $ServerDomain"
