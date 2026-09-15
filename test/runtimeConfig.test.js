@@ -28,6 +28,7 @@ const validProductionEnv = () => ({
   PAYKEEPER_LOGIN: "api-user",
   PAYKEEPER_PASSWORD: "api-password",
   PAYKEEPER_SECRET_SEED: "payment-secret-seed",
+  PAYKEEPER_TEST_MODE: "0",
   ENABLE_CDEK_RETRY_CRON: "1",
   ENABLE_RESERVATION_CRON: "1",
   ENABLE_TELEGRAM_ORDER_CHANNEL: "0",
@@ -65,6 +66,7 @@ test("production startup rejects missing and unsafe critical settings", () => {
   env.PAYKEEPER_SECRET_SEED = "tiny";
   env.CDEK_CLIENT_SECRET = "";
   env.ENABLE_CDEK_RETRY_CRON = "yes";
+  env.PAYKEEPER_TEST_MODE = "yes";
 
   assert.throws(
     () => validateRuntimeConfig(env),
@@ -78,6 +80,7 @@ test("production startup rejects missing and unsafe critical settings", () => {
       assert.match(error.message, /PAYKEEPER_SECRET_SEED/);
       assert.match(error.message, /CDEK_CLIENT_SECRET/);
       assert.match(error.message, /ENABLE_CDEK_RETRY_CRON/);
+      assert.match(error.message, /PAYKEEPER_TEST_MODE/);
       return true;
     }
   );

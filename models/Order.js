@@ -44,6 +44,7 @@ const Order = sequelize.define("order", {
 
   // Payment
   totalPrice: { type: DataTypes.INTEGER, allowNull: true },
+  paymentAmount: { type: DataTypes.DECIMAL(12, 2), allowNull: true },
   deliveryAddress: { type: DataTypes.STRING, allowNull: true },
 
   // Provider info

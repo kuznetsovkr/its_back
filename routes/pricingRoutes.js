@@ -22,6 +22,10 @@ const {
   getPricingExtras,
   updatePricingConfig,
 } = require("../services/pricingConfig");
+const {
+  isPaykeeperTestMode,
+  resolvePaykeeperAmount,
+} = require("../services/paymentMode");
 
 const router = express.Router();
 const SIZE_GUIDE_KEYS = new Set(["tshirt", "hoodie", "svitshot"]);
@@ -226,12 +230,15 @@ router.post("/checkout", requireTrustedOrigin, pricingQuoteRateLimit, async (req
       cdekMode,
       cdekAddress,
     });
+    const totalPrice = merchandiseQuote.merchandisePrice + deliveryQuote.deliveryPrice;
     return res.json({
       currency: "RUB",
       manual: false,
       merchandisePrice: merchandiseQuote.merchandisePrice,
       deliveryPrice: deliveryQuote.deliveryPrice,
-      totalPrice: merchandiseQuote.merchandisePrice + deliveryQuote.deliveryPrice,
+      totalPrice,
+      paymentAmount: resolvePaykeeperAmount(totalPrice),
+      paymentTestMode: isPaykeeperTestMode(),
     });
   } catch (error) {
     if (error instanceof PricingError || error instanceof RequestValidationError) {

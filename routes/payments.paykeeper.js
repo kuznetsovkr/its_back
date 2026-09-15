@@ -11,6 +11,9 @@ const {
 } = require("../services/inventoryReservations");
 const { canAccessOrder, requireOrderAccess } = require("../middleware/orderAccess");
 const {
+  resolvePaykeeperAmount,
+} = require("../services/paymentMode");
+const {
   paymentCallbackRateLimit,
   paymentLinkRateLimit,
 } = require("../middleware/rateLimit");
@@ -77,11 +80,19 @@ router.post("/link", requireOrderAccess, paymentLinkRateLimit, async (req, res) 
         return {
           invoice_id: order.paykeeperInvoiceId,
           pay_url: makePayUrl(order.paykeeperInvoiceId),
+          payment_amount: Number(order.paymentAmount || orderAmount),
         };
       }
 
+      const paymentAmount = order.paymentAmount == null
+        ? resolvePaykeeperAmount(orderAmount)
+        : Number(order.paymentAmount);
+      if (!Number.isFinite(paymentAmount) || paymentAmount <= 0) {
+        return { status: 409, message: "Некорректная сумма счёта для оплаты" };
+      }
+
       const invoice = await createInvoice({
-        pay_amount: formatMoney(orderAmount),
+        pay_amount: formatMoney(paymentAmount),
         clientid: [order.lastName, order.firstName, order.middleName]
           .filter(Boolean)
           .join(" ") || "Покупатель",
@@ -95,8 +106,13 @@ router.post("/link", requireOrderAccess, paymentLinkRateLimit, async (req, res) 
         paymentProvider: "paykeeper",
         paymentStatus: "pending",
         paykeeperInvoiceId: invoice.invoice_id,
+        paymentAmount,
       }, { transaction });
-      return invoice;
+      return {
+        ...invoice,
+        payment_amount: paymentAmount,
+        test_mode: paymentAmount !== orderAmount,
+      };
     });
 
     if (payment.status) {
@@ -156,7 +172,7 @@ router.post(
       const order = await Order.findByPk(parsedOrderId);
       if (!order) return res.status(404).send("Order not found");
 
-      const expectedOrderAmount = Number(order.totalPrice);
+      const expectedOrderAmount = Number(order.paymentAmount ?? order.totalPrice);
       const receivedAmount = Number(amount);
       if (
         !Number.isFinite(expectedOrderAmount) ||

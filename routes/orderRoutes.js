@@ -39,6 +39,10 @@ const {
 } = require("../services/orderPricing");
 const { getPricingExtras } = require("../services/pricingConfig");
 const {
+  isPaykeeperTestMode,
+  resolvePaykeeperAmount,
+} = require("../services/paymentMode");
+const {
   TurnstileVerificationError,
   verifyTurnstileToken,
 } = require("../services/turnstileVerification");
@@ -127,6 +131,8 @@ router.post(
     const totalPrice = isManualFlow
       ? null
       : merchandiseQuote.merchandisePrice + cdekQuote.deliveryPrice;
+    const paymentAmount = isManualFlow ? null : resolvePaykeeperAmount(totalPrice);
+    const paymentTestMode = !isManualFlow && isPaykeeperTestMode();
     const canonicalDeliveryAddress = cdekQuote
       ? [
           "СДЭК",
@@ -167,6 +173,7 @@ router.post(
         paymentStatus: isManualFlow ? "manual" : "pending",
         paymentProvider: isManualFlow ? "manual" : null,
         totalPrice,
+        paymentAmount,
         deliveryAddress: canonicalDeliveryAddress,
       },
       shipmentValues: cdekQuote
@@ -241,6 +248,8 @@ router.post(
       merchandisePrice: merchandiseQuote.merchandisePrice,
       deliveryPrice: cdekQuote?.deliveryPrice ?? null,
       totalPrice,
+      paymentAmount,
+      paymentTestMode,
       reservationExpiresAt: reservation.expiresAt,
     });
     checkItemAndNotify(inv.id).catch((error) => {
@@ -562,6 +571,7 @@ router.get('/:id', requireOrderAccess, orderReadRateLimit, async (req, res) => {
     status: order.status,                        // бизнес-статус
     paidAt: order.paidAt,
     totalPrice: order.totalPrice,
+    paymentAmount: order.paymentAmount == null ? null : Number(order.paymentAmount),
     pricePending: order.paymentStatus === "manual" || order.paymentProvider === "manual" || order.totalPrice == null,
     paykeeperInvoiceId: order.paykeeperInvoiceId,
     paykeeperPaymentId: order.paykeeperPaymentId,

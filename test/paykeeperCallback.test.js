@@ -7,10 +7,15 @@ const SECRET = "test-paykeeper-secret-seed";
 const ORDER_ID = 42;
 const ORDER_TOTAL = 6100;
 const finalizedPayments = [];
+const createdInvoices = [];
 
 const order = {
   id: ORDER_ID,
   totalPrice: ORDER_TOTAL,
+  paymentAmount: null,
+  paymentProvider: null,
+  paymentStatus: "pending",
+  paykeeperInvoiceId: null,
   status: "Ожидание оплаты",
   paidAt: null,
   async update(values) {
@@ -30,7 +35,10 @@ mockModule("../db", {
   transaction: async (callback) => callback({ LOCK: { UPDATE: "UPDATE" } }),
 });
 mockModule("../lib/paykeeper", {
-  createInvoice: async () => ({ invoice_id: "invoice-1", pay_url: "https://pay.example" }),
+  createInvoice: async (payload) => {
+    createdInvoices.push(payload);
+    return { invoice_id: "invoice-1", pay_url: "https://pay.example" };
+  },
 });
 mockModule("../models/Order", {
   findByPk: async (id) => (Number(id) === ORDER_ID ? order : null),
@@ -75,10 +83,55 @@ const callbackBody = (overrides = {}) => {
   return new URLSearchParams({ ...fields, key: overrides.key || signature(fields) });
 };
 
+test("PayKeeper link stores and charges the one-ruble test amount", async (t) => {
+  const previousMode = process.env.PAYKEEPER_TEST_MODE;
+  process.env.PAYKEEPER_TEST_MODE = "1";
+  order.paymentAmount = null;
+  order.paymentProvider = null;
+  order.paymentStatus = "pending";
+  order.paykeeperInvoiceId = null;
+  createdInvoices.length = 0;
+
+  const app = express();
+  app.use(express.json());
+  app.use("/payments/paykeeper", paykeeperRouter);
+  const server = await new Promise((resolve) => {
+    const listener = app.listen(0, "127.0.0.1", () => resolve(listener));
+  });
+
+  t.after(async () => {
+    if (previousMode === undefined) delete process.env.PAYKEEPER_TEST_MODE;
+    else process.env.PAYKEEPER_TEST_MODE = previousMode;
+    order.paymentAmount = null;
+    order.paymentProvider = null;
+    order.paymentStatus = "pending";
+    order.paykeeperInvoiceId = null;
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  const response = await fetch(
+    `http://127.0.0.1:${server.address().port}/payments/paykeeper/link`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ orderId: ORDER_ID }),
+    }
+  );
+  const result = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(result.payment_amount, 1);
+  assert.equal(result.test_mode, true);
+  assert.equal(order.totalPrice, ORDER_TOTAL);
+  assert.equal(order.paymentAmount, 1);
+  assert.equal(createdInvoices[0].pay_amount, "1.00");
+});
+
 test("PayKeeper callback verifies its signature and server-side order amount", async (t) => {
   const previousSecret = process.env.PAYKEEPER_SECRET_SEED;
   const previousConsoleWarn = console.warn;
   process.env.PAYKEEPER_SECRET_SEED = SECRET;
+  order.paymentAmount = null;
   console.warn = () => {};
   finalizedPayments.length = 0;
 
@@ -91,6 +144,7 @@ test("PayKeeper callback verifies its signature and server-side order amount", a
   t.after(async () => {
     if (previousSecret === undefined) delete process.env.PAYKEEPER_SECRET_SEED;
     else process.env.PAYKEEPER_SECRET_SEED = previousSecret;
+    order.paymentAmount = null;
     console.warn = previousConsoleWarn;
     await new Promise((resolve) => server.close(resolve));
   });
@@ -129,4 +183,13 @@ test("PayKeeper callback verifies its signature and server-side order amount", a
   });
   assert.equal(wrongAmountResponse.status, 400);
   assert.equal(finalizedPayments.length, 1);
+
+  order.paymentAmount = 1;
+  const testAmountResponse = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: callbackBody({ id: "payment-test-2", sum: "1.00" }),
+  });
+  assert.equal(testAmountResponse.status, 200);
+  assert.equal(finalizedPayments.length, 2);
 });

@@ -177,6 +177,7 @@ const validateRuntimeConfig = (env = process.env) => {
     "ENABLE_LOW_STOCK_CRON",
     "ENABLE_SQL_LOGGING",
     "ENABLE_STARTUP_WARNINGS",
+    "PAYKEEPER_TEST_MODE",
     "TRUST_PROXY",
     "TURNSTILE_ENABLED",
   ]) {

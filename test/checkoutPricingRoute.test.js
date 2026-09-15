@@ -38,6 +38,8 @@ mockModule("../services/pricingConfig", {
 const pricingRoutes = require("../routes/pricingRoutes");
 
 test("checkout quote returns a server-calculated delivery and total", async (t) => {
+  const previousTestMode = process.env.PAYKEEPER_TEST_MODE;
+  process.env.PAYKEEPER_TEST_MODE = "1";
   const express = require("express");
   const app = express();
   app.use(express.json());
@@ -46,7 +48,11 @@ test("checkout quote returns a server-calculated delivery and total", async (t) 
   const server = await new Promise((resolve) => {
     const listener = app.listen(0, "127.0.0.1", () => resolve(listener));
   });
-  t.after(() => new Promise((resolve) => server.close(resolve)));
+  t.after(async () => {
+    if (previousTestMode === undefined) delete process.env.PAYKEEPER_TEST_MODE;
+    else process.env.PAYKEEPER_TEST_MODE = previousTestMode;
+    await new Promise((resolve) => server.close(resolve));
+  });
 
   const url = `http://127.0.0.1:${server.address().port}/pricing/checkout`;
   const body = {
@@ -70,6 +76,8 @@ test("checkout quote returns a server-calculated delivery and total", async (t) 
   assert.equal(result.merchandisePrice, 8500);
   assert.equal(result.deliveryPrice, 742);
   assert.equal(result.totalPrice, 9242);
+  assert.equal(result.paymentAmount, 1);
+  assert.equal(result.paymentTestMode, true);
 
   const rejected = await fetch(url, {
     method: "POST",

@@ -13,6 +13,20 @@ npm --prefix .\its_prototype run test:e2e:install
 The suite uses the isolated frontend demo mode: it does not create real
 orders, reserve stock, contact CDEK, or open PayKeeper.
 
+## One-ruble PayKeeper checks
+
+Staging can create real PayKeeper invoices for exactly one ruble without
+overwriting the calculated order total. Enable this only in the staging
+environment and restart the application:
+
+```text
+PAYKEEPER_TEST_MODE=1
+```
+
+Before promoting the server to production, set the value back to `0`. The
+amount saved with an existing order remains its source of truth, so callbacks
+continue to validate correctly even if the mode changes later.
+
 ## PostgreSQL and uploads backups
 
 The application timer creates restorable PostgreSQL dumps and compressed

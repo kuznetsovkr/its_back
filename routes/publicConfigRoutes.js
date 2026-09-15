@@ -1,6 +1,7 @@
 const express = require("express");
 const { getPublicTurnstileConfig } = require("../services/turnstileVerification");
 const { getPublicCdekConfig } = require("../services/orderPricing");
+const { getPublicPaymentConfig } = require("../services/paymentMode");
 
 const router = express.Router();
 
@@ -9,6 +10,7 @@ router.get("/", (_req, res) => {
   return res.json({
     turnstile: getPublicTurnstileConfig(),
     cdek: getPublicCdekConfig(),
+    payment: getPublicPaymentConfig(),
   });
 });
 
