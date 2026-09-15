@@ -166,6 +166,7 @@ test("PayKeeper callback verifies its signature and server-side order amount", a
     eventId: "pk-payment-test-1",
     paymentConfirmed: true,
     overrides: { paymentId: "payment-test-1" },
+    deferSideEffects: true,
   }]);
 
   const extendedCallbackResponse = await fetch(endpoint, {

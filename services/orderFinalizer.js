@@ -16,6 +16,7 @@ const finalizePaidOrder = async ({
   eventId,
   overrides = {},
   paymentConfirmed = false,
+  deferSideEffects = false,
 }) => {
   const parsedOrderId = Number(orderId);
   if (!Number.isInteger(parsedOrderId) || parsedOrderId < 1) {
@@ -91,28 +92,40 @@ const finalizePaidOrder = async ({
 
   if (!result.ok) return result;
 
-  if (!result.alreadyProcessed) {
-    try {
-      await checkItemAndNotify(result.inventory.id);
-    } catch (error) {
-      console.error("Low-stock notify error:", error);
+  const runSideEffects = async () => {
+    if (!result.alreadyProcessed) {
+      try {
+        await checkItemAndNotify(result.inventory.id);
+      } catch (error) {
+        console.error("Low-stock notify error:", error);
+      }
+
+      try {
+        const files = await OrderAttachment.findAll({ where: { orderId: parsedOrderId }, raw: true });
+        await sendOrderToTelegram(result.order.toJSON(), files);
+      } catch (error) {
+        console.error("Telegram send error:", error);
+      }
     }
 
-    try {
-      const files = await OrderAttachment.findAll({ where: { orderId: parsedOrderId }, raw: true });
-      await sendOrderToTelegram(result.order.toJSON(), files);
-    } catch (error) {
-      console.error("Telegram send error:", error);
+    if (result.order.paymentStatus === "paid") {
+      try {
+        result.shipment = await createCdekShipmentForOrder(parsedOrderId);
+      } catch (error) {
+        // Оплата и резерв уже подтверждены. Повтор выполнит фоновая задача.
+        console.error(`[CDEK] Shipment creation failed for paid order ${parsedOrderId}:`, error.message);
+      }
     }
-  }
+  };
 
-  if (result.order.paymentStatus === "paid") {
-    try {
-      result.shipment = await createCdekShipmentForOrder(parsedOrderId);
-    } catch (error) {
-      // Оплата и резерв уже подтверждены. Повтор выполнит фоновая задача.
-      console.error(`[CDEK] Shipment creation failed for paid order ${parsedOrderId}:`, error.message);
-    }
+  if (deferSideEffects) {
+    setImmediate(() => {
+      runSideEffects().catch((error) => {
+        console.error(`Paid-order side effects failed for order ${parsedOrderId}:`, error);
+      });
+    });
+  } else {
+    await runSideEffects();
   }
 
   return result;

@@ -196,6 +196,9 @@ router.post(
           eventId: `pk-${paymentId}`,
           paymentConfirmed: true,
           overrides: { paymentId },
+          // Acknowledge PayKeeper as soon as the payment and stock reservation
+          // are durably committed. Telegram and CDEK continue independently.
+          deferSideEffects: true,
         });
         if (!finalized.ok) {
           throw new Error(finalized.message || "Order finalization failed");
