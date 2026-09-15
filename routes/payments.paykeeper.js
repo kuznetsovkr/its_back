@@ -22,7 +22,10 @@ const router = express.Router();
 const callbackFormParser = express.urlencoded({
   extended: false,
   limit: "16kb",
-  parameterLimit: 12,
+  // PayKeeper may append optional service, bank and receipt fields to the
+  // five signed callback fields. Values outside our allowlist are ignored
+  // below, while the body-size limit still bounds the request.
+  parameterLimit: 32,
 });
 
 const formatMoney = (value) => Number(value).toFixed(2);

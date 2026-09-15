@@ -168,13 +168,33 @@ test("PayKeeper callback verifies its signature and server-side order amount", a
     overrides: { paymentId: "payment-test-1" },
   }]);
 
+  const extendedCallbackResponse = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: callbackBody({
+      id: "payment-test-extended",
+      service_name: "Order payment",
+      client_email: "customer@example.com",
+      client_phone: "+79990000000",
+      ps_id: "card",
+      batch_date: "2026-09-15",
+      fop_receipt_key: "receipt-test",
+      bank_id: "bank-test",
+      card_number: "411111******1111",
+      card_holder: "TEST CUSTOMER",
+      card_expiry: "12/30",
+    }),
+  });
+  assert.equal(extendedCallbackResponse.status, 200);
+  assert.equal(finalizedPayments.length, 2);
+
   const invalidSignatureResponse = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: callbackBody({ key: "0".repeat(32) }),
   });
   assert.equal(invalidSignatureResponse.status, 400);
-  assert.equal(finalizedPayments.length, 1);
+  assert.equal(finalizedPayments.length, 2);
 
   const wrongAmountResponse = await fetch(endpoint, {
     method: "POST",
@@ -182,7 +202,7 @@ test("PayKeeper callback verifies its signature and server-side order amount", a
     body: callbackBody({ sum: "1.00" }),
   });
   assert.equal(wrongAmountResponse.status, 400);
-  assert.equal(finalizedPayments.length, 1);
+  assert.equal(finalizedPayments.length, 2);
 
   order.paymentAmount = 1;
   const testAmountResponse = await fetch(endpoint, {
@@ -191,5 +211,5 @@ test("PayKeeper callback verifies its signature and server-side order amount", a
     body: callbackBody({ id: "payment-test-2", sum: "1.00" }),
   });
   assert.equal(testAmountResponse.status, 200);
-  assert.equal(finalizedPayments.length, 2);
+  assert.equal(finalizedPayments.length, 3);
 });
