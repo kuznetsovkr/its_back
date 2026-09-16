@@ -140,6 +140,38 @@ function Send-ChunkedFile {
     Start-Sleep -Seconds $SshConnectionCooldownSeconds
 }
 
+function Send-FileWithRetry {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter(Mandatory = $true)][string]$RemotePath,
+        [Parameter(Mandatory = $true)][string]$RemoteTarget,
+        [Parameter(Mandatory = $true)][string[]]$SshOptions,
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory,
+        [ValidateRange(1, 10)][int]$MaxAttempts = 4
+    )
+
+    foreach ($attempt in 1..$MaxAttempts) {
+        try {
+            Invoke-NativeCommand -FilePath "scp.exe" -Arguments ($SshOptions + @(
+                "-O", $FilePath, "${RemoteTarget}:${RemotePath}"
+            )) -WorkingDirectory $WorkingDirectory
+            return
+        }
+        catch {
+            if ($attempt -eq $MaxAttempts) {
+                throw
+            }
+
+            $retryDelaySeconds = [Math]::Max(
+                $SshConnectionCooldownSeconds,
+                10 * $attempt
+            )
+            Write-Warning "Upload attempt $attempt failed for $([IO.Path]::GetFileName($FilePath)); retrying in $retryDelaySeconds seconds"
+            Start-Sleep -Seconds $retryDelaySeconds
+        }
+    }
+}
+
 function Get-GitOutput {
     param(
         [Parameter(Mandatory = $true)][string]$Repository,
@@ -343,13 +375,19 @@ try {
         -RemoteTarget $RemoteTarget `
         -SshOptions $SshOptions `
         -WorkingDirectory $WorkspaceRoot
-    Invoke-NativeCommand -FilePath "scp.exe" -Arguments ($SshOptions + @(
-        "-O", $BackendArchive, "${RemoteTarget}:${RemoteBackendArchive}"
-    )) -WorkingDirectory $WorkspaceRoot
+    Send-FileWithRetry `
+        -FilePath $BackendArchive `
+        -RemotePath $RemoteBackendArchive `
+        -RemoteTarget $RemoteTarget `
+        -SshOptions $SshOptions `
+        -WorkingDirectory $WorkspaceRoot
     Start-Sleep -Seconds $SshConnectionCooldownSeconds
-    Invoke-NativeCommand -FilePath "scp.exe" -Arguments ($SshOptions + @(
-        "-O", $RemoteHelperCopy, "${RemoteTarget}:${RemoteHelper}"
-    )) -WorkingDirectory $WorkspaceRoot
+    Send-FileWithRetry `
+        -FilePath $RemoteHelperCopy `
+        -RemotePath $RemoteHelper `
+        -RemoteTarget $RemoteTarget `
+        -SshOptions $SshOptions `
+        -WorkingDirectory $WorkspaceRoot
     Start-Sleep -Seconds $SshConnectionCooldownSeconds
 
     Write-Step "Installing and activating the release"
