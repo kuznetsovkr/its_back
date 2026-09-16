@@ -25,7 +25,7 @@ param(
     [string]$SshUser = "itsdeploy",
     [string]$SshKeyPath = "$env:USERPROFILE\.ssh\its_firstvds_codex",
     [ValidateRange(0, 60)]
-    [int]$SshConnectionCooldownSeconds = 7,
+    [int]$SshConnectionCooldownSeconds = 15,
     [switch]$ValidateOnly
 )
 
@@ -63,6 +63,37 @@ function Invoke-NativeCommand {
     }
 }
 
+function Invoke-SshCommandWithRetry {
+    param(
+        [Parameter(Mandatory = $true)][string]$RemoteTarget,
+        [Parameter(Mandatory = $true)][string[]]$SshOptions,
+        [Parameter(Mandatory = $true)][string]$Command,
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory,
+        [ValidateRange(1, 10)][int]$MaxAttempts = 4
+    )
+
+    foreach ($attempt in 1..$MaxAttempts) {
+        try {
+            Invoke-NativeCommand -FilePath "ssh.exe" -Arguments ($SshOptions + @(
+                $RemoteTarget, $Command
+            )) -WorkingDirectory $WorkingDirectory
+            return
+        }
+        catch {
+            if ($attempt -eq $MaxAttempts) {
+                throw
+            }
+
+            $retryDelaySeconds = [Math]::Max(
+                $SshConnectionCooldownSeconds,
+                10 * $attempt
+            )
+            Write-Warning "SSH command attempt $attempt failed; retrying in $retryDelaySeconds seconds"
+            Start-Sleep -Seconds $retryDelaySeconds
+        }
+    }
+}
+
 function Send-ChunkedFile {
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
@@ -75,9 +106,11 @@ function Send-ChunkedFile {
     )
 
     $cleanupCommand = "rm -f -- $RemotePath ${RemoteChunkPrefix}*"
-    Invoke-NativeCommand -FilePath "ssh.exe" -Arguments ($SshOptions + @(
-        $RemoteTarget, $cleanupCommand
-    )) -WorkingDirectory $WorkingDirectory
+    Invoke-SshCommandWithRetry `
+        -RemoteTarget $RemoteTarget `
+        -SshOptions $SshOptions `
+        -Command $cleanupCommand `
+        -WorkingDirectory $WorkingDirectory
     Start-Sleep -Seconds $SshConnectionCooldownSeconds
 
     $inputStream = [IO.File]::OpenRead($FilePath)
@@ -134,9 +167,11 @@ function Send-ChunkedFile {
 
     Write-Host "Uploaded $chunkIndex chunks for $([IO.Path]::GetFileName($FilePath))"
     $assembleCommand = "cat ${RemoteChunkPrefix}* > $RemotePath && rm -f -- ${RemoteChunkPrefix}*"
-    Invoke-NativeCommand -FilePath "ssh.exe" -Arguments ($SshOptions + @(
-        $RemoteTarget, $assembleCommand
-    )) -WorkingDirectory $WorkingDirectory
+    Invoke-SshCommandWithRetry `
+        -RemoteTarget $RemoteTarget `
+        -SshOptions $SshOptions `
+        -Command $assembleCommand `
+        -WorkingDirectory $WorkingDirectory
     Start-Sleep -Seconds $SshConnectionCooldownSeconds
 }
 
@@ -392,9 +427,11 @@ try {
 
     Write-Step "Installing and activating the release"
     $RemoteCommand = "bash $RemoteHelper $ReleaseId $FrontendHash $BackendHash $ServerDomain"
-    Invoke-NativeCommand -FilePath "ssh.exe" -Arguments ($SshOptions + @(
-        $RemoteTarget, $RemoteCommand
-    )) -WorkingDirectory $WorkspaceRoot
+    Invoke-SshCommandWithRetry `
+        -RemoteTarget $RemoteTarget `
+        -SshOptions $SshOptions `
+        -Command $RemoteCommand `
+        -WorkingDirectory $WorkspaceRoot
     $RemoteArtifactsMayExist = $false
 
     Write-Step "Running client-side smoke tests"
