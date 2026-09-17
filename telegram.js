@@ -10,19 +10,24 @@ const { getTelegramAxiosRequestConfig } = require("./services/telegramProxy");
 
 const CHANNEL = TELEGRAM_CHANNELS.ORDERS;
 const telegramRequestConfig = getTelegramAxiosRequestConfig();
+const TELEGRAM_CAPTION_LIMIT = 1024;
+const TELEGRAM_TEXT_LIMIT = 4096;
+const TRUNCATION_NOTICE = "\n\n… Полные данные сохранены в заказе.";
 
-async function sendText(chatId, text) {
+async function sendText(chatId, text, { parseMode = "Markdown" } = {}) {
   const { enabled, token } = getTelegramChannelConfig(CHANNEL);
   if (!enabled || !token || !chatId) return false;
   try {
+    const payload = {
+      chat_id: chatId,
+      text,
+      disable_web_page_preview: true,
+    };
+    if (parseMode) payload.parse_mode = parseMode;
+
     await axios.post(
       `https://api.telegram.org/bot${token}/sendMessage`,
-      {
-        chat_id: chatId,
-        text,
-        parse_mode: "Markdown",
-        disable_web_page_preview: true,
-      },
+      payload,
       telegramRequestConfig
     );
     return true;
@@ -32,34 +37,90 @@ async function sendText(chatId, text) {
   }
 }
 
-async function sendPhoto(chatId, fileOrId, filename) {
+const bestPhotoFileId = (message) => {
+  const photos = message?.photo || [];
+  return photos[photos.length - 1]?.file_id || null;
+};
+
+async function sendPhotoCard(chatId, fileOrId, caption, filename) {
   const { enabled, token } = getTelegramChannelConfig(CHANNEL);
-  if (!enabled || !token || !chatId) return null;
+  if (!enabled || !token || !chatId) return { sent: false, fileIds: [] };
   try {
+    let resp;
     if (typeof fileOrId === "string" && !Buffer.isBuffer(fileOrId)) {
-      await axios.post(
+      resp = await axios.post(
         `https://api.telegram.org/bot${token}/sendPhoto`,
-        { chat_id: chatId, photo: fileOrId },
+        { chat_id: chatId, photo: fileOrId, caption },
         telegramRequestConfig
       );
-      return null;
+    } else {
+      const form = new FormData();
+      form.append("chat_id", chatId);
+      form.append("caption", caption);
+      form.append("photo", fileOrId, { filename: filename || "photo.jpg" });
+
+      resp = await axios.post(
+        `https://api.telegram.org/bot${token}/sendPhoto`,
+        form,
+        { ...telegramRequestConfig, headers: form.getHeaders() }
+      );
     }
-    const form = new FormData();
-    form.append("chat_id", chatId);
-    form.append("photo", fileOrId, { filename: filename || "photo.jpg" });
 
-    const resp = await axios.post(
-      `https://api.telegram.org/bot${token}/sendPhoto`,
-      form,
-      { ...telegramRequestConfig, headers: form.getHeaders() }
-    );
-
-    const photos = resp?.data?.result?.photo || [];
-    const best = photos[photos.length - 1];
-    return best?.file_id || null;
+    const fileId = bestPhotoFileId(resp?.data?.result);
+    return { sent: true, fileIds: fileId ? [fileId] : [] };
   } catch (e) {
     console.error(`TG sendPhoto(${chatId}) error:`, e.response?.data || e.message);
-    return null;
+    return { sent: false, fileIds: [] };
+  }
+}
+
+async function sendMediaGroupCard(chatId, mediaItems, caption) {
+  const { enabled, token } = getTelegramChannelConfig(CHANNEL);
+  if (!enabled || !token || !chatId) return { sent: false, fileIds: [] };
+
+  const withCaption = (media, index) => ({
+    type: "photo",
+    media,
+    ...(index === 0 ? { caption } : {}),
+  });
+
+  try {
+    let resp;
+    if (mediaItems.every((item) => typeof item === "string")) {
+      resp = await axios.post(
+        `https://api.telegram.org/bot${token}/sendMediaGroup`,
+        {
+          chat_id: chatId,
+          media: mediaItems.map(withCaption),
+        },
+        telegramRequestConfig
+      );
+    } else {
+      const form = new FormData();
+      const media = mediaItems.map((_item, index) => withCaption(`attach://photo_${index}`, index));
+      form.append("chat_id", chatId);
+      form.append("media", JSON.stringify(media));
+      mediaItems.forEach((item, index) => {
+        form.append(`photo_${index}`, item.buffer, {
+          filename: item.filename || `photo-${index + 1}.jpg`,
+        });
+      });
+
+      resp = await axios.post(
+        `https://api.telegram.org/bot${token}/sendMediaGroup`,
+        form,
+        { ...telegramRequestConfig, headers: form.getHeaders() }
+      );
+    }
+
+    const messages = Array.isArray(resp?.data?.result) ? resp.data.result : [];
+    return {
+      sent: true,
+      fileIds: messages.map(bestPhotoFileId).filter(Boolean),
+    };
+  } catch (e) {
+    console.error(`TG sendMediaGroup(${chatId}) error:`, e.response?.data || e.message);
+    return { sent: false, fileIds: [] };
   }
 }
 
@@ -113,12 +174,18 @@ const formatPaidAt = (ts) => {
   }
 };
 
-/**
- * Отправляет заказ в Telegram (основная инфа + комментарий + медиа)
- */
-const sendOrderToTelegram = async (order, attachments = []) => {
+const fitTelegramMessage = (value, limit) => {
+  const text = String(value || "");
+  if (text.length <= limit) return text;
 
-  const comment = (order.comment || "").trim();
+  const available = Math.max(0, limit - TRUNCATION_NOTICE.length);
+  let end = available;
+  if (end > 0 && /[\uD800-\uDBFF]/.test(text[end - 1])) end -= 1;
+  return `${text.slice(0, end).trimEnd()}${TRUNCATION_NOTICE}`;
+};
+
+const buildOrderMessage = (order) => {
+  const comment = String(order.comment || "").trim();
   const embroidery = embroideryLabel(order);
   const counts = [];
   if (String(order.embroideryType || "").toLowerCase() === "patronus") {
@@ -128,34 +195,41 @@ const sendOrderToTelegram = async (order, attachments = []) => {
     const hasPetFace = Number.isFinite(order.petFaceCount) && order.petFaceCount > 0;
     if (hasPetFace) counts.push(`мордашек: ${order.petFaceCount}`);
   }
-  const countsStr = counts.length ? ` (${md(counts.join(", "))})` : "";
-  const priceText = priceLabel(order);
+  const countsStr = counts.length ? ` (${counts.join(", ")})` : "";
   const customerName = fullName(order);
   const recipientName = String(order.recipientFullName || "").trim();
   const separateRecipient = recipientName && recipientName !== customerName;
   const contactDetails = [
-    order.email ? `E-mail: ${md(order.email)}` : "",
-    order.preferredContact ? `Связь: ${md(order.preferredContact)}` : "",
+    order.email ? `E-mail: ${order.email}` : "",
+    order.preferredContact ? `Связь: ${order.preferredContact}` : "",
   ].filter(Boolean);
 
-  const mainMessage =
-    `🧾 *Заказ #${order.id} — новый*\n` +
-    `👤 ${md(customerName) || "Имя не указано"}\n` +
-    `📞 ${md(formatPhone(order.phone))}\n` +
-    (separateRecipient ? `📦 Получатель: ${md(recipientName)}\n` : "") +
-    (contactDetails.length ? `${contactDetails.join(" • ")}\n` : "") +
-    `🧥 ${md(order.productType || "-")} • ${md(order.color || "-")} • ${md(order.size || "-")}\n` +
-    (embroidery
-      ? `🧵 ${md(embroidery)}${countsStr}${order.customText ? ` «${md(order.customText)}»` : ""}${order.customTextFont ? ` • шрифт: ${md(order.customTextFont)}` : ""}\n`
-      : ""
-    ) +
-    (order.deliveryCity ? `🏙 ${md(order.deliveryCity)}\n` : "") +
-    `📍 ${md(order.deliveryAddress || "-")}\n` +
-    (order.deliveryComment ? `🚚 ${md(order.deliveryComment)}\n` : "") +
-    `💰 ${md(priceText)}\n` +
-    (order.paidAt ? `✅ Оплачен: ${md(formatPaidAt(order.paidAt))}\n` : "");
+  return [
+    `🧾 Заказ #${order.id} — новый`,
+    `👤 ${customerName || "Имя не указано"}`,
+    `📞 ${formatPhone(order.phone)}`,
+    separateRecipient ? `📦 Получатель: ${recipientName}` : "",
+    contactDetails.length ? contactDetails.join(" • ") : "",
+    `🧥 ${order.productType || "-"} • ${order.color || "-"} • ${order.size || "-"}`,
+    embroidery
+      ? `🧵 ${embroidery}${countsStr}${order.customText ? ` «${order.customText}»` : ""}${order.customTextFont ? ` • шрифт: ${order.customTextFont}` : ""}`
+      : "",
+    order.deliveryCity ? `🏙 ${order.deliveryCity}` : "",
+    `📍 ${order.deliveryAddress || "-"}`,
+    order.deliveryComment ? `🚚 ${order.deliveryComment}` : "",
+    `💰 ${priceLabel(order)}`,
+    order.paidAt ? `✅ Оплачен: ${formatPaidAt(order.paidAt)}` : "",
+    comment ? `💬 Комментарий:\n${comment}` : "",
+  ].filter(Boolean).join("\n");
+};
 
-  const commentMessage = comment ? `💬 Комментарий:\n${md(comment)}` : null;
+/**
+ * Отправляет заказ одной карточкой: текстом, фото с подписью или альбомом.
+ */
+const sendOrderToTelegram = async (order, attachments = []) => {
+  const message = buildOrderMessage(order);
+  const caption = fitTelegramMessage(message, TELEGRAM_CAPTION_LIMIT);
+  const textMessage = fitTelegramMessage(message, TELEGRAM_TEXT_LIMIT);
 
   const recipients = await getTelegramRecipients(CHANNEL);
   if (!recipients.length) {
@@ -177,34 +251,31 @@ const sendOrderToTelegram = async (order, attachments = []) => {
     }
   }
 
-  let cachedFileIds;
+  let cachedFileIds = [];
 
   for (let idx = 0; idx < recipients.length; idx++) {
     const chatId = recipients[idx];
 
-    // 1) Основная информация
-    await sendText(chatId, mainMessage);
-
-    // 2) Комментарий (если есть)
-    if (commentMessage) {
-      await sendText(chatId, commentMessage);
+    if (!photos.length) {
+      await sendText(chatId, textMessage, { parseMode: null });
+      continue;
     }
 
-    // 3) Фото/вложения
-    if (!photos.length) continue;
+    const reusableMedia = cachedFileIds.length === photos.length ? cachedFileIds : null;
+    const media = reusableMedia || photos;
+    const result = media.length === 1
+      ? await sendPhotoCard(
+          chatId,
+          reusableMedia ? media[0] : media[0].buffer,
+          caption,
+          reusableMedia ? undefined : media[0].filename
+        )
+      : await sendMediaGroupCard(chatId, media, caption);
 
-    if (idx === 0) {
-      cachedFileIds = [];
-      for (let i = 0; i < photos.length; i++) {
-        const p = photos[i];
-        const fileId = await sendPhoto(chatId, p.buffer, p.filename);
-        if (fileId) cachedFileIds[i] = fileId;
-      }
-    } else {
-      for (let i = 0; i < (cachedFileIds?.length || 0); i++) {
-        const fileId = cachedFileIds[i];
-        if (fileId) await sendPhoto(chatId, fileId);
-      }
+    if (!result.sent) {
+      await sendText(chatId, textMessage, { parseMode: null });
+    } else if (!reusableMedia && result.fileIds.length === photos.length) {
+      cachedFileIds = result.fileIds;
     }
   }
 };
@@ -226,3 +297,6 @@ const sendOrderIssueToTelegram = async (order, issue) => {
 
 module.exports = sendOrderToTelegram;
 module.exports.sendOrderIssueToTelegram = sendOrderIssueToTelegram;
+module.exports.buildOrderMessage = buildOrderMessage;
+module.exports.fitTelegramMessage = fitTelegramMessage;
+module.exports.TELEGRAM_CAPTION_LIMIT = TELEGRAM_CAPTION_LIMIT;
