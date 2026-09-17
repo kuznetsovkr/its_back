@@ -20,6 +20,21 @@ const getCdekRetryDelayMs = (attempts) => {
   );
 };
 
+const markCdekShipmentAwaitingFulfillment = async (orderId, transaction) => {
+  const shipment = await OrderShipment.findOne({
+    where: { orderId, provider: "cdek" },
+    transaction,
+    lock: transaction?.LOCK.UPDATE,
+  });
+  if (!shipment || shipment.status === "created") return shipment;
+  shipment.status = "awaiting_fulfillment";
+  shipment.processingStartedAt = null;
+  shipment.nextAttemptAt = null;
+  shipment.lastError = null;
+  await shipment.save({ transaction });
+  return shipment;
+};
+
 const markCdekShipmentReady = async (orderId, transaction) => {
   const shipment = await OrderShipment.findOne({
     where: { orderId, provider: "cdek" },
@@ -228,6 +243,7 @@ module.exports = {
   buildCdekOrderPayload,
   createCdekShipmentForOrder,
   getCdekRetryDelayMs,
+  markCdekShipmentAwaitingFulfillment,
   markCdekShipmentReady,
   refreshCdekShipment,
   retryPendingCdekShipments,

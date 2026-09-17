@@ -15,7 +15,15 @@ const OrderShipment = sequelize.define("order_shipment", {
     allowNull: false,
     defaultValue: "pending_payment",
     validate: {
-      isIn: [["pending_payment", "ready", "processing", "created", "failed", "cancelled"]],
+      isIn: [[
+        "pending_payment",
+        "awaiting_fulfillment",
+        "ready",
+        "processing",
+        "created",
+        "failed",
+        "cancelled",
+      ]],
     },
   },
   tariffCode: { type: DataTypes.INTEGER, allowNull: false },

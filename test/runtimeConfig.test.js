@@ -29,7 +29,8 @@ const validProductionEnv = () => ({
   PAYKEEPER_PASSWORD: "api-password",
   PAYKEEPER_SECRET_SEED: "payment-secret-seed",
   PAYKEEPER_TEST_MODE: "0",
-  ENABLE_CDEK_RETRY_CRON: "1",
+  ENABLE_CDEK_AUTO_SHIPMENT: "0",
+  ENABLE_CDEK_RETRY_CRON: "0",
   ENABLE_RESERVATION_CRON: "1",
   ENABLE_TELEGRAM_ORDER_CHANNEL: "0",
   ENABLE_TELEGRAM_LOW_STOCK_CHANNEL: "0",
@@ -65,6 +66,7 @@ test("production startup rejects missing and unsafe critical settings", () => {
   env.ADMIN_PASSWORD = "weak";
   env.PAYKEEPER_SECRET_SEED = "tiny";
   env.CDEK_CLIENT_SECRET = "";
+  env.ENABLE_CDEK_AUTO_SHIPMENT = "yes";
   env.ENABLE_CDEK_RETRY_CRON = "yes";
   env.PAYKEEPER_TEST_MODE = "yes";
 
@@ -96,19 +98,34 @@ test("admin and guest-order JWT secrets must be independent", () => {
   );
 });
 
-test("critical reservation and shipment workers cannot be disabled in production", () => {
+test("critical reservation worker cannot be disabled in production", () => {
   const env = validProductionEnv();
   env.ENABLE_RESERVATION_CRON = "0";
-  env.ENABLE_CDEK_RETRY_CRON = "0";
 
   assert.throws(
     () => validateRuntimeConfig(env),
     (error) => {
       assert.match(error.message, /ENABLE_RESERVATION_CRON must be enabled/);
-      assert.match(error.message, /ENABLE_CDEK_RETRY_CRON must be enabled/);
       return true;
     }
   );
+});
+
+test("CDEK retry worker is required only when automatic shipments are enabled", () => {
+  const env = validProductionEnv();
+  env.ENABLE_CDEK_AUTO_SHIPMENT = "1";
+  env.ENABLE_CDEK_RETRY_CRON = "0";
+
+  assert.throws(
+    () => validateRuntimeConfig(env),
+    /ENABLE_CDEK_RETRY_CRON must be enabled when CDEK auto shipment is enabled/
+  );
+
+  env.ENABLE_CDEK_RETRY_CRON = "1";
+  assert.deepEqual(validateRuntimeConfig(env), {
+    validated: true,
+    mode: "production",
+  });
 });
 
 test("production requires real Turnstile credentials for its public hostname", () => {

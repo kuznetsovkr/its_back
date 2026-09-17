@@ -170,6 +170,7 @@ const validateRuntimeConfig = (env = process.env) => {
   }
 
   for (const name of [
+    "ENABLE_CDEK_AUTO_SHIPMENT",
     "ENABLE_CDEK_RETRY_CRON",
     "ENABLE_RESERVATION_CRON",
     "ENABLE_TELEGRAM_ORDER_CHANNEL",
@@ -188,12 +189,18 @@ const validateRuntimeConfig = (env = process.env) => {
 
   for (const name of [
     "ENABLE_RESERVATION_CRON",
-    "ENABLE_CDEK_RETRY_CRON",
     "TURNSTILE_ENABLED",
   ]) {
     if (String(env[name] || "") !== "1") {
       errors.push(`${name} must be enabled in production`);
     }
+  }
+
+  if (
+    String(env.ENABLE_CDEK_AUTO_SHIPMENT || "0") === "1" &&
+    String(env.ENABLE_CDEK_RETRY_CRON || "") !== "1"
+  ) {
+    errors.push("ENABLE_CDEK_RETRY_CRON must be enabled when CDEK auto shipment is enabled");
   }
 
   if (errors.length) throw new RuntimeConfigError(errors);

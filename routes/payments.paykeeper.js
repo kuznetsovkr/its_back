@@ -197,7 +197,7 @@ router.post(
           paymentConfirmed: true,
           overrides: { paymentId },
           // Acknowledge PayKeeper as soon as the payment and stock reservation
-          // are durably committed. Telegram and CDEK continue independently.
+          // are durably committed. Telegram notification continues independently.
           deferSideEffects: true,
         });
         if (!finalized.ok) {

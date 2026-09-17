@@ -2,10 +2,12 @@ const sequelize = require("../db");
 const Order = require("../models/Order");
 const PaymentEvent = require("../models/PaymentEvent");
 const OrderAttachment = require("../models/OrderAttachment");
+const { isCdekAutoShipmentEnabled } = require("../config/cdekAutomation");
 const { checkItemAndNotify } = require("./lowStockMonitor");
 const { commitReservationForOrder } = require("./inventoryReservations");
 const {
   createCdekShipmentForOrder,
+  markCdekShipmentAwaitingFulfillment,
   markCdekShipmentReady,
 } = require("./cdekShipments");
 const sendOrderToTelegram = require("../telegram");
@@ -23,6 +25,10 @@ const finalizePaidOrder = async ({
     throw new Error("orderId is required");
   }
   const normalizedEventId = String(eventId || `${provider}-${parsedOrderId}`).slice(0, 255);
+  const autoCdekShipmentEnabled = isCdekAutoShipmentEnabled();
+  const markPaidShipment = autoCdekShipmentEnabled
+    ? markCdekShipmentReady
+    : markCdekShipmentAwaitingFulfillment;
 
   const result = await sequelize.transaction(async (transaction) => {
     const order = await Order.findByPk(parsedOrderId, {
@@ -57,7 +63,7 @@ const finalizePaidOrder = async ({
 
     if (alreadyProcessed) {
       if (order.paymentStatus === "paid") {
-        await markCdekShipmentReady(order.id, transaction);
+        await markPaidShipment(order.id, transaction);
       }
       return { ok: true, alreadyProcessed: true, order, inventory: null };
     }
@@ -81,7 +87,7 @@ const finalizePaidOrder = async ({
     } else {
       order.status = "Оплачено";
       order.paidAt = order.paidAt || new Date();
-      await markCdekShipmentReady(order.id, transaction);
+      await markPaidShipment(order.id, transaction);
     }
     if (hasNumericOverridePrice) order.totalPrice = overridePrice;
     if (overrides.deliveryAddress) order.deliveryAddress = overrides.deliveryAddress;
@@ -108,7 +114,7 @@ const finalizePaidOrder = async ({
       }
     }
 
-    if (result.order.paymentStatus === "paid") {
+    if (autoCdekShipmentEnabled && result.order.paymentStatus === "paid") {
       try {
         result.shipment = await createCdekShipmentForOrder(parsedOrderId);
       } catch (error) {

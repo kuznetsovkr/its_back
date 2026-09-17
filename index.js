@@ -28,6 +28,7 @@ const {
 const { assertDatabaseMigrationsCurrent } = require("./services/databaseMigrations");
 const { isClientAppRoute } = require("./config/clientRoutes");
 const { validateRuntimeConfig } = require("./config/runtimeConfig");
+const { isCdekAutoShipmentEnabled } = require("./config/cdekAutomation");
 const {
   TELEGRAM_CHANNELS,
   getTelegramChannelConfig,
@@ -43,6 +44,7 @@ require("./models/PricingConfig");
 const ENABLE_LOW_STOCK_CRON = process.env.ENABLE_LOW_STOCK_CRON === "1";
 const ENABLE_RESERVATION_CRON = process.env.ENABLE_RESERVATION_CRON !== "0";
 const ENABLE_CDEK_RETRY_CRON = process.env.ENABLE_CDEK_RETRY_CRON !== "0";
+const ENABLE_CDEK_AUTO_SHIPMENT = isCdekAutoShipmentEnabled();
 const ENABLE_STARTUP_WARNINGS = process.env.ENABLE_STARTUP_WARNINGS === "1";
 
 validateRuntimeConfig(process.env);
@@ -169,7 +171,7 @@ const start = async () => {
       });
     }
 
-    if (ENABLE_CDEK_RETRY_CRON) {
+    if (ENABLE_CDEK_AUTO_SHIPMENT && ENABLE_CDEK_RETRY_CRON) {
       let cdekRetryRunning = false;
       const retryCdekShipments = async () => {
         if (cdekRetryRunning) return;
