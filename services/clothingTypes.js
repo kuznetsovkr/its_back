@@ -1,4 +1,5 @@
 const crypto = require("node:crypto");
+const { MAX_PATRONUS_COUNT } = require("../lib/embroideryLimits");
 const ClothingType = require("../models/ClothingType");
 
 const CLOTHING_TYPE_ATTRIBUTES = Object.freeze([
@@ -43,7 +44,9 @@ const serializeClothingType = (record) => {
     code: value.code,
     displayOrder: value.displayOrder,
     sizeGuideKey: value.sizeGuideKey || null,
-    patronusLimit: value.patronusLimit,
+    patronusLimit: Number.isInteger(value.patronusLimit) && value.patronusLimit > 0
+      ? Math.min(value.patronusLimit, MAX_PATRONUS_COUNT)
+      : value.patronusLimit,
     prices: getTypePrices(value),
     package: {
       width: value.packageWidth,

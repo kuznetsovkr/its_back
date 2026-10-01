@@ -85,4 +85,39 @@ test("checkout quote returns a server-calculated delivery and total", async (t) 
     body: JSON.stringify({ ...body, totalPrice: 1 }),
   });
   assert.equal(rejected.status, 400);
+
+  const quoteUrl = `http://127.0.0.1:${server.address().port}/pricing/quote`;
+  const quote = (patronusCount, petFaceCount) => fetch(quoteUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      productType: body.productType,
+      color: body.color,
+      size: body.size,
+      patronusCount,
+      petFaceCount,
+    }),
+  });
+  const fourPatronuses = await quote(4, 5);
+  assert.equal(fourPatronuses.status, 200);
+  assert.deepEqual((await fourPatronuses.json()).prices, {
+    Patronus: 25000, Car: 8500, petFace: 16000,
+  });
+  const fivePatronuses = await quote(5, 5);
+  assert.equal(fivePatronuses.status, 400);
+  assert.match((await fivePatronuses.json()).message, /не более 4 патронусов/);
+  const sixPetFaces = await quote(4, 6);
+  assert.equal(sixPetFaces.status, 400);
+  assert.match((await sixPetFaces.json()).message, /не более 5 портретов/);
+
+  const checkout = (embroideryType, patronusCount, petFaceCount) => fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...body, embroideryType, patronusCount, petFaceCount }),
+  });
+  assert.equal((await checkout("Patronus", 4, 1)).status, 200);
+  assert.equal((await checkout("Patronus", 5, 1)).status, 400);
+  assert.equal((await checkout("petFace", 1, 5)).status, 200);
+  assert.equal((await checkout("petFace", 1, 6)).status, 400);
+  assert.equal((await checkout("Car", 5, 1)).status, 200);
 });

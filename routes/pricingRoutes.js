@@ -1,4 +1,5 @@
 const express = require("express");
+const { MAX_PATRONUS_COUNT, MAX_PET_FACE_COUNT } = require("../lib/embroideryLimits");
 const requireTrustedOrigin = require("../middleware/trustedOrigin");
 const requireAdmin = require("../middleware/requireAdmin");
 const { pricingQuoteRateLimit } = require("../middleware/rateLimit");
@@ -15,6 +16,8 @@ const {
   ensurePlainObject,
   parseJsonObject,
   readPositiveInteger,
+  readPatronusCount,
+  readPetFaceCount,
   readString,
 } = require("../lib/requestValidation");
 const {
@@ -61,7 +64,7 @@ const readPricingConfig = (body) => {
       id: readPositiveInteger(type.id, `${field}.id`, { max: 1_000_000 }),
       displayOrder: readPositiveInteger(type.displayOrder, `${field}.displayOrder`, { max: 10_000 }),
       sizeGuideKey,
-      patronusLimit: readPositiveInteger(type.patronusLimit, `${field}.patronusLimit`, { max: 5 }),
+      patronusLimit: readPositiveInteger(type.patronusLimit, `${field}.patronusLimit`, { max: MAX_PATRONUS_COUNT }),
       prices: {
         Patronus: readPositiveInteger(prices.Patronus, `${field}.prices.Patronus`, { max: 1_000_000 }),
         Car: readPositiveInteger(prices.Car, `${field}.prices.Car`, { max: 1_000_000 }),
@@ -136,8 +139,8 @@ router.post("/quote", requireTrustedOrigin, pricingQuoteRateLimit, async (req, r
     const productType = readString(body.productType, "productType", { required: true, max: 120 });
     const color = readString(body.color, "color", { required: true, max: 80 });
     const size = readString(body.size, "size", { required: true, max: 16 });
-    const patronusCount = readPositiveInteger(body.patronusCount, "patronusCount", { max: 5 });
-    const petFaceCount = readPositiveInteger(body.petFaceCount, "petFaceCount", { max: 5 });
+    const patronusCount = readPatronusCount(body.patronusCount);
+    const petFaceCount = readPetFaceCount(body.petFaceCount);
     const inventory = await findInventoryForOrder(productType, color, size);
 
     if (!inventory) {
@@ -194,8 +197,10 @@ router.post("/checkout", requireTrustedOrigin, pricingQuoteRateLimit, async (req
       required: true,
       max: 32,
     });
-    const patronusCount = readPositiveInteger(body.patronusCount, "patronusCount", { max: 5 });
-    const petFaceCount = readPositiveInteger(body.petFaceCount, "petFaceCount", { max: 5 });
+    const patronusCount = embroideryType.toLowerCase() === "patronus"
+      ? readPatronusCount(body.patronusCount)
+      : readPositiveInteger(body.patronusCount, "patronusCount", { max: MAX_PET_FACE_COUNT });
+    const petFaceCount = readPetFaceCount(body.petFaceCount);
     const cdekMode = readString(body.cdekMode, "cdekMode", { max: 16 }).toLowerCase();
     const cdekAddress = body.cdekAddress
       ? parseJsonObject(body.cdekAddress, "cdekAddress")

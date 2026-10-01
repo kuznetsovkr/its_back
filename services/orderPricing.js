@@ -1,4 +1,5 @@
 const axios = require("axios");
+const { MAX_PATRONUS_COUNT, MAX_PET_FACE_COUNT } = require("../lib/embroideryLimits");
 const { getCdekRequestContext } = require("./cdekClient");
 
 const DEFAULT_CDEK_TARIFF_CODE = 136;
@@ -74,11 +75,12 @@ const calculateMerchandisePrice = ({
   if (normalizedType === "Patronus") {
     const count = parseCount(patronusCount, "patronusCount");
     const limit = Number(clothingProfile.patronusLimit);
-    if (!Number.isInteger(limit) || limit < 1 || limit > 5) {
+    if (!Number.isInteger(limit) || limit < 1) {
       throw new PricingError("Лимит патронусов для изделия не настроен", 500, "invalid_clothing_profile");
     }
-    if (count > limit) {
-      throw new PricingError(`Для выбранного изделия доступно не более ${limit} патронусов`);
+    const effectiveLimit = Math.min(limit, MAX_PATRONUS_COUNT);
+    if (count > effectiveLimit) {
+      throw new PricingError(`Для выбранного изделия доступно не более ${effectiveLimit} патронусов`);
     }
     const additionalPrice = pricingConfig?.additional?.Patronus;
     if (!Number.isInteger(additionalPrice) || additionalPrice < 0) {
@@ -89,8 +91,8 @@ const calculateMerchandisePrice = ({
 
   if (normalizedType === "petFace") {
     const count = parseCount(petFaceCount, "petFaceCount");
-    if (count > 5) {
-      throw new PricingError("Можно заказать не более 5 портретов питомца");
+    if (count > MAX_PET_FACE_COUNT) {
+      throw new PricingError(`Можно заказать не более ${MAX_PET_FACE_COUNT} портретов питомца`);
     }
     const additionalPrice = pricingConfig?.additional?.petFace;
     if (!Number.isInteger(additionalPrice) || additionalPrice < 0) {

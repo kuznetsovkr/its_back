@@ -56,9 +56,24 @@ test("order validation normalizes trusted values and rejects client price fields
 });
 
 test("order validation enforces bounded counters and the selected custom mode", () => {
+  assert.equal(validateOrderCreateInput({
+    ...validOrder(), embroideryType: "Patronus", patronusCount: "4",
+  }, [{}]).patronusCount, 4);
   assert.throws(
-    () => validateOrderCreateInput({ ...validOrder(), patronusCount: "999" }, [{}]),
-    (error) => error.field === "patronusCount"
+    () => validateOrderCreateInput({
+      ...validOrder(), embroideryType: "Patronus", patronusCount: "5",
+    }, [{}]),
+    (error) => error.field === "patronusCount" && /не более 4 патронусов/.test(error.message)
+  );
+  assert.equal(validateOrderCreateInput({
+    ...validOrder(), embroideryType: "Car", patronusCount: "5",
+  }, [{}]).embroideryType, "Car");
+  assert.equal(validateOrderCreateInput({
+    ...validOrder(), embroideryType: "petFace", petFaceCount: "5",
+  }, [{}]).petFaceCount, 5);
+  assert.throws(
+    () => validateOrderCreateInput({ ...validOrder(), petFaceCount: "6" }, [{}]),
+    (error) => error.field === "petFaceCount"
   );
 
   const custom = {

@@ -1,4 +1,5 @@
 const { DataTypes } = require("sequelize");
+const { MAX_PATRONUS_COUNT } = require("../lib/embroideryLimits");
 const sequelize = require("../db");
 
 const ClothingType = sequelize.define("clothingType", {
@@ -30,7 +31,9 @@ const ClothingType = sequelize.define("clothingType", {
     patronusLimit: {
         type: DataTypes.INTEGER,
         allowNull: false,
-        defaultValue: 5,
+        defaultValue: MAX_PATRONUS_COUNT,
+        // Старые записи могут содержать 5. Публичный лимит ограничен сервисом,
+        // новые настройки админки принимают не более 4.
         validate: { min: 1, max: 5 },
     },
     packageWidth: {

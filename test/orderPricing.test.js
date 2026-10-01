@@ -94,6 +94,42 @@ test("сервер отклоняет недопустимое количест�
     }),
     (error) => error instanceof PricingError && /не более 1/.test(error.message)
   );
+  assert.equal(calculateMerchandisePrice({
+    inventory: inventory("hoodie"),
+    embroideryType: "Patronus",
+    patronusCount: 4,
+    pricingConfig,
+  }).merchandisePrice, 25000);
+  assert.throws(
+    () => calculateMerchandisePrice({
+      inventory: inventory("hoodie"),
+      embroideryType: "Patronus",
+      patronusCount: 5,
+      pricingConfig,
+    }),
+    (error) => error instanceof PricingError && /не более 4 патронусов/.test(error.message)
+  );
+  assert.equal(calculateMerchandisePrice({
+    inventory: inventory("hoodie"),
+    embroideryType: "petFace",
+    petFaceCount: 5,
+    pricingConfig,
+  }).merchandisePrice, 16000);
+  assert.throws(
+    () => calculateMerchandisePrice({
+      inventory: inventory("hoodie"),
+      embroideryType: "petFace",
+      petFaceCount: 6,
+      pricingConfig,
+    }),
+    (error) => error instanceof PricingError && /не более 5 портретов/.test(error.message)
+  );
+  assert.equal(calculateMerchandisePrice({
+    inventory: inventory("hoodie"),
+    embroideryType: "Car",
+    patronusCount: 5,
+    pricingConfig,
+  }).merchandisePrice, 8500);
 });
 
 test("индивидуальная вышивка переводит заказ на ручной расчёт", () => {
