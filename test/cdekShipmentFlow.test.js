@@ -8,7 +8,7 @@ const {
 
 test("CDEK shipment payload charges nothing on delivery and uses server parcel data", () => {
   const payload = buildCdekOrderPayload({
-    order: { id: 77, productType: "Футболка" },
+    order: { id: 77, productType: "Футболка", phone: "+79991234567" },
     inventory: {
       productType: "Футболка",
       clothingType: {
@@ -22,14 +22,16 @@ test("CDEK shipment payload charges nothing on delivery and uses server parcel d
     shipment: {
       tariffCode: 136,
       deliveryPoint: "MSK123",
-      recipientName: "Иван Иванов",
-      recipientPhone: "+79991234567",
+      recipientName: "Пётр Петров",
+      recipientPhone: "+79123456789",
       declaredValue: 6500,
     },
   });
 
   assert.equal(payload.number, "77");
   assert.equal(payload.delivery_point, "MSK123");
+  assert.equal(payload.recipient.name, "Пётр Петров");
+  assert.equal(payload.recipient.phones[0].number, "+79123456789");
   assert.equal(payload.packages[0].weight, 300);
   assert.equal(payload.packages[0].items[0].cost, 6500);
   assert.equal(payload.packages[0].items[0].payment.value, 0);

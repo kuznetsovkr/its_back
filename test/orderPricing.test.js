@@ -130,7 +130,7 @@ test("стоимость доставки пересчитывается по д
   axios.get = async (_url, config) => {
     assert.equal(config.params.code, "KRS1");
     return {
-      data: [{ code: "KRS1", location: { city_code: 44, address: "Настоящий адрес" } }],
+      data: [{ code: "KRS1", location: { city_code: 44, city: "Красноярск", address: "Настоящий адрес" } }],
     };
   };
   axios.post = async (url, payload) => {
@@ -160,6 +160,7 @@ test("стоимость доставки пересчитывается по д
 
     assert.equal(result.deliveryPrice, 742);
     assert.equal(result.office.location.city_code, 44);
+    assert.equal(result.office.location.city, "Красноярск");
     assert.equal(result.tariffCode, 136);
   } finally {
     axios.get = originalGet;

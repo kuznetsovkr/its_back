@@ -16,12 +16,11 @@ const validOrder = () => ({
   lastName: "Иванов",
   middleName: "",
   phone: "+7 999 123-45-67",
-  recipientPhoneDigits: "89991234567",
-  recipientFullName: "Иванов Иван",
+  recipientPhoneDigits: "",
+  recipientFullName: "",
   email: "",
   preferredContact: "telegram",
   deliveryComment: "",
-  deliveryCity: "Красноярск",
   privacyConsent: "true",
   productType: "Футболка",
   color: "Чёрный",
@@ -45,6 +44,7 @@ test("order validation normalizes trusted values and rejects client price fields
   const validated = validateOrderCreateInput(validOrder(), [{}]);
   assert.equal(validated.phone, "+79991234567");
   assert.equal(validated.recipientPhone, "+79991234567");
+  assert.equal(validated.recipientFullName, "Иванов Иван");
   assert.equal(validated.embroideryType, "Car");
   assert.equal(validated.embroideryTypeRu, "Автомобиль");
   assert.equal(validated.turnstileToken, "turnstile-response-token");
@@ -85,6 +85,34 @@ test("order validation enforces bounded counters and the selected custom mode", 
     () => validateOrderCreateInput({ ...custom, customTextFont: "Unsupported Font" }, []),
     (error) => error.field === "customTextFont"
   );
+});
+
+test("another recipient requires their own valid phone", () => {
+  const namedRecipient = { ...validOrder(), recipientFullName: "Петров Пётр" };
+  assert.throws(
+    () => validateOrderCreateInput(namedRecipient, [{}]),
+    (error) => error.field === "recipientPhoneDigits"
+  );
+  assert.throws(
+    () => validateOrderCreateInput({ ...validOrder(), recipientPhoneDigits: "89123456789" }, [{}]),
+    (error) => error.field === "recipientFullName"
+  );
+  assert.throws(
+    () => validateOrderCreateInput({ ...namedRecipient, recipientPhoneDigits: "123" }, [{}]),
+    (error) => error.field === "recipientPhoneDigits"
+  );
+
+  const validated = validateOrderCreateInput({
+    ...namedRecipient,
+    recipientPhoneDigits: "89123456789",
+  }, [{}]);
+  assert.equal(validated.recipientFullName, "Петров Пётр");
+  assert.equal(validated.recipientPhone, "+79123456789");
+});
+
+test("legacy city input cannot override the server-provided location", () => {
+  const validated = validateOrderCreateInput({ ...validOrder(), deliveryCity: "Чужой город" }, [{}]);
+  assert.equal(Object.hasOwn(validated, "deliveryCity"), false);
 });
 
 test("public CDEK calculation replaces origin and uses a package profile from the catalog", () => {
