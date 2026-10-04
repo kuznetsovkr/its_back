@@ -9,6 +9,8 @@ const ORDER_TOTAL = 6100;
 const finalizedPayments = [];
 const createdInvoices = [];
 const certificatePayments = [];
+const certificateReviews = [];
+let finalizationError = null;
 
 const order = {
   id: ORDER_ID,
@@ -47,7 +49,17 @@ mockModule("../models/Order", {
 mockModule("../services/orderFinalizer", {
   finalizePaidOrder: async (payload) => {
     finalizedPayments.push(payload);
+    if (finalizationError) throw finalizationError;
     return { ok: true, alreadyProcessed: false, order };
+  },
+});
+mockModule("../services/giftCertificates", { assertCertificateReservationForOrder: async () => true });
+mockModule("../services/certificateOrderReview", {
+  recordCertificatePaymentReview: async (input) => {
+    if (order.paymentStatus === "review") return false;
+    certificateReviews.push(input);
+    Object.assign(order, { paymentStatus: "review", paykeeperPaymentId: input.paymentId });
+    return true;
   },
 });
 mockModule("../telegram", { sendOrderIssueToTelegram: async () => 0 });
@@ -253,4 +265,43 @@ test("PayKeeper dispatches only signed certificate callbacks and rejects their w
   assert.equal(loggedErrors.length, 1);
   assert.equal(certificatePayments.length, 1);
   assert.equal(finalizedPayments.length, before);
+});
+
+test("PayKeeper charges only the stored remainder and sends late certificate failures to review", async (t) => {
+  const previous = { PAYKEEPER_SECRET_SEED: process.env.PAYKEEPER_SECRET_SEED, PAYKEEPER_TEST_MODE: process.env.PAYKEEPER_TEST_MODE };
+  Object.assign(process.env, { PAYKEEPER_SECRET_SEED: SECRET, PAYKEEPER_TEST_MODE: "1" });
+  const originalOrder = { ...order };
+  Object.assign(order, { certificateId: 12, totalPrice: 6390, amountDueKopecks: 39000, paymentAmount: 390,
+    paymentTestMode: false, paymentStatus: "pending", paykeeperInvoiceId: null });
+  const app = express();
+  app.use(express.json());
+  app.use("/pk", paykeeperRouter);
+  const server = await new Promise((resolve) => { const listener = app.listen(0, "127.0.0.1", () => resolve(listener)); });
+  t.after(async () => {
+    for (const key of Object.keys(order)) delete order[key];
+    Object.assign(order, originalOrder);
+    finalizationError = null;
+    for (const [name, value] of Object.entries(previous)) if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    await new Promise((resolve) => server.close(resolve));
+  });
+  const url = `http://127.0.0.1:${server.address().port}/pk`;
+  const link = () => fetch(url + "/link", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderId: ORDER_ID }) });
+  let response = await link();
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).test_mode, false, "changing global mode must not alter an existing financial snapshot");
+  assert.equal(createdInvoices.at(-1).pay_amount, "390.00");
+  const invoiceCount = createdInvoices.length;
+  response = await link();
+  assert.equal((await response.json()).payment_amount, 390);
+  assert.equal(createdInvoices.length, invoiceCount);
+  const callback = (sum) => fetch(url + "/callback", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: callbackBody({ sum }) });
+  assert.equal((await callback("6390.00")).status, 400);
+  assert.equal((await callback("1.00")).status, 400);
+  finalizationError = Object.assign(new Error("Late certificate reserve"), { name: "GiftCertificateError", code: "paid_order_certificate_unavailable" });
+  assert.equal((await callback("390.00")).status, 200);
+  assert.equal(order.paymentStatus, "review");
+  assert.deepEqual(certificateReviews, [{ orderId: ORDER_ID, paymentId: "payment-test-1" }]);
+  assert.equal((await callback("390.00")).status, 200);
+  assert.equal(certificateReviews.length, 1);
+  assert.equal((await link()).status, 409);
 });

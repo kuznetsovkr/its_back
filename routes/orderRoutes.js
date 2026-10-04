@@ -38,10 +38,10 @@ const {
   calculateMerchandisePrice,
 } = require("../services/orderPricing");
 const { getPricingExtras } = require("../services/pricingConfig");
-const {
-  isPaykeeperTestMode,
-  resolvePaykeeperAmount,
-} = require("../services/paymentMode");
+const { GiftCertificateError } = require("../lib/giftCertificateRules");
+const { reserveCertificateForOrder, releaseCertificateForOrder } = require("../services/giftCertificates");
+const { buildOrderPaymentSnapshot, publicOrderPayment } = require("../services/orderCertificatePricing");
+const { isPaykeeperTestMode } = require("../services/paymentMode");
 const {
   TurnstileVerificationError,
   verifyTurnstileToken,
@@ -98,6 +98,7 @@ router.post(
       cdekMode,
       cdekAddress,
       turnstileToken,
+      certificateCode,
     } = validated;
 
     await verifyTurnstileToken({
@@ -120,6 +121,9 @@ router.post(
       pricingConfig,
     });
     const isManualFlow = merchandiseQuote.manual || !cdekMode;
+    if (certificateCode && isManualFlow) {
+      throw new GiftCertificateError("Сертификат можно применить после расчёта стоимости. Для ручной заявки обратитесь к менеджеру", "certificate_manual_price_pending", 400);
+    }
     const cdekQuote = isManualFlow
       ? null
       : await calculateCdekDelivery({
@@ -130,7 +134,10 @@ router.post(
     const totalPrice = isManualFlow
       ? null
       : merchandiseQuote.merchandisePrice + cdekQuote.deliveryPrice;
-    const paymentAmount = isManualFlow ? null : resolvePaykeeperAmount(totalPrice);
+    const paymentSnapshot = isManualFlow ? {} : buildOrderPaymentSnapshot({
+      merchandisePrice: merchandiseQuote.merchandisePrice, deliveryPrice: cdekQuote.deliveryPrice,
+    });
+    const paymentAmount = isManualFlow ? null : paymentSnapshot.paymentAmount;
     const paymentTestMode = !isManualFlow && isPaykeeperTestMode();
     const canonicalDeliveryAddress = cdekQuote
       ? [
@@ -173,6 +180,7 @@ router.post(
         paymentProvider: isManualFlow ? "manual" : null,
         totalPrice,
         paymentAmount,
+        ...paymentSnapshot,
         deliveryAddress: canonicalDeliveryAddress,
       },
       shipmentValues: cdekQuote
@@ -185,6 +193,18 @@ router.post(
             declaredValue: merchandiseQuote.merchandisePrice,
           }
         : null,
+      preparePayment: certificateCode ? async ({ order: createdOrder, reservation: stockReservation, transaction }) => {
+        const certificateReservation = await reserveCertificateForOrder({
+          orderId: createdOrder.id, code: certificateCode,
+          productAmountKopecks: paymentSnapshot.merchandiseAmountKopecks,
+          expiresAt: stockReservation.expiresAt, transaction,
+        });
+        await createdOrder.update({
+          ...buildOrderPaymentSnapshot({ merchandisePrice: merchandiseQuote.merchandisePrice, deliveryPrice: cdekQuote.deliveryPrice,
+            discountKopecks: certificateReservation.amountKopecks, testMode: paymentTestMode }),
+          certificateId: certificateReservation.certificateId,
+        }, { transaction });
+      } : null,
     });
 
     // 📎 Сохранить прикреплённые файлы как вложения заказа
@@ -226,6 +246,7 @@ router.post(
             lock: transaction.LOCK.UPDATE,
           });
           await releaseReservationForOrder(order.id, "attachment_failure", transaction);
+          if (failedOrder?.certificateId) await releaseCertificateForOrder({ orderId: order.id, reason: "cancelled", transaction });
           if (failedOrder) {
             failedOrder.status = "Ошибка сохранения вложений";
             failedOrder.paymentStatus = "cancelled";
@@ -249,6 +270,7 @@ router.post(
       totalPrice,
       paymentAmount,
       paymentTestMode,
+      ...publicOrderPayment(order),
       reservationExpiresAt: reservation.expiresAt,
     });
     checkItemAndNotify(inv.id).catch((error) => {
@@ -260,6 +282,7 @@ router.post(
       error instanceof ReservationError ||
       error instanceof RequestValidationError ||
       error instanceof TurnstileVerificationError
+      || error instanceof GiftCertificateError
     ) {
       return res.status(error.statusCode).json({
         message: error.message,
@@ -322,6 +345,7 @@ router.put("/update-status/:orderId", requireAdmin, orderMutationRateLimit, asyn
                 if (lockedOrder.paymentStatus === "pending") {
                     lockedOrder.paymentStatus = "cancelled";
                 }
+                if (lockedOrder.certificateId) await releaseCertificateForOrder({ orderId, reason: "cancelled", transaction });
             }
             lockedOrder.status = status;
             await lockedOrder.save({ transaction });
@@ -367,6 +391,8 @@ router.get("/status/:orderId", requireOrderAccess, orderReadRateLimit, async (re
         });
         res.json({
             status: order.status,
+            paymentStatus: order.paymentStatus,
+            requiresReview: order.paymentStatus === "review" || String(order.status).includes("требуется проверка"),
             shipmentStatus: shipment?.status || null,
             cdekNumber: shipment?.cdekNumber || null,
         });
@@ -374,6 +400,26 @@ router.get("/status/:orderId", requireOrderAccess, orderReadRateLimit, async (re
         console.error("Ошибка получения статуса заказа:", error);
         res.status(500).json({ message: "Ошибка сервера" });
     }
+});
+
+router.post("/:orderId/complete-certificate", requireTrustedOrigin, requireOrderAccess, orderMutationRateLimit, async (req, res) => {
+  try {
+    const id = Number(req.params.orderId);
+    if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({ message: "Некорректный номер заказа" });
+    if (!req.is("application/json") || !req.body || Array.isArray(req.body) || Object.keys(req.body).length) {
+      return res.status(400).json({ message: "Отправьте пустой JSON-объект без суммы" });
+    }
+    const order = await Order.findByPk(id);
+    if (!order) return res.status(404).json({ message: "Заказ не найден" });
+    if (!canAccessOrder(req, order)) return res.status(403).json({ message: "Нет доступа к заказу" });
+    const result = await finalizePaidOrder({ orderId: id, provider: "certificate", eventId: `certificate-${id}`, paymentConfirmed: true, deferSideEffects: true });
+    if (!result.ok) return res.status(409).json({ message: result.message });
+    return res.json({ ok: true, alreadyProcessed: result.alreadyProcessed });
+  } catch (error) {
+    if (error.statusCode && error.code) return res.status(error.statusCode).json({ message: error.message, code: error.code });
+    console.error("[certificate-order] Completion failed");
+    return res.status(500).json({ message: "Не удалось завершить заказ с сертификатом. Попробуйте снова" });
+  }
 });
 
 router.get("/all", requireAdmin, orderReadRateLimit, async (_req, res) => {
@@ -566,11 +612,13 @@ router.get('/:id', requireOrderAccess, orderReadRateLimit, async (req, res) => {
   res.json({
     id: order.id,
     paymentStatus: order.paymentStatus || null, // 'pending' | 'paid' | 'failed'
+    requiresReview: order.paymentStatus === "review",
     paymentProvider: order.paymentProvider || null,
     status: order.status,                        // бизнес-статус
     paidAt: order.paidAt,
     totalPrice: order.totalPrice,
     paymentAmount: order.paymentAmount == null ? null : Number(order.paymentAmount),
+    ...publicOrderPayment(order),
     pricePending: order.paymentStatus === "manual" || order.paymentProvider === "manual" || order.totalPrice == null,
     paykeeperInvoiceId: order.paykeeperInvoiceId,
     paykeeperPaymentId: order.paykeeperPaymentId,

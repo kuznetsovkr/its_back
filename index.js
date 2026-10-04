@@ -30,6 +30,7 @@ const { isClientAppRoute } = require("./config/clientRoutes");
 const { validateRuntimeConfig } = require("./config/runtimeConfig");
 const { isCdekAutoShipmentEnabled } = require("./config/cdekAutomation");
 const { createCertificateRouter } = require("./routes/certificateRoutes");
+const { createCertificateAdminRouter } = require("./routes/certificateAdminRoutes");
 const { getCertificateMailConfig, assertCertificateCheckoutConfigured, isCertificatePurchaseEnabled } = require("./config/certificateCheckout");
 const { processCertificateDeliveries } = require("./services/certificateDelivery");
 const {
@@ -85,6 +86,7 @@ app.use(express.json({ limit: "64kb", strict: true }));
 app.use("/api/auth", authRoutes);
 app.use("/api/public-config", publicConfigRoutes);
 app.use("/api/certificates", createCertificateRouter());
+app.use("/api/admin/certificates", createCertificateAdminRouter());
 app.use("/api/orders", orderRoutes);
 app.use("/api/inventory", inventoryRoutes);
 app.use("/api/clothing-types", clothingTypeRoutes);
@@ -179,6 +181,8 @@ const start = async () => {
         reservationCleanupRunning = true;
         try {
           const inventoryIds = await releaseExpiredReservations();
+          const { releaseExpiredCertificateReservations } = require("./services/giftCertificates");
+          await releaseExpiredCertificateReservations();
           await Promise.all([...new Set(inventoryIds)].map((id) => checkItemAndNotify(id)));
         } finally {
           reservationCleanupRunning = false;

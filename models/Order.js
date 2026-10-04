@@ -45,6 +45,12 @@ const Order = sequelize.define("order", {
   // Payment
   totalPrice: { type: DataTypes.INTEGER, allowNull: true },
   paymentAmount: { type: DataTypes.DECIMAL(12, 2), allowNull: true },
+  merchandiseAmountKopecks: { type: DataTypes.INTEGER, allowNull: true },
+  deliveryAmountKopecks: { type: DataTypes.INTEGER, allowNull: true },
+  certificateDiscountKopecks: { type: DataTypes.INTEGER, allowNull: true },
+  amountDueKopecks: { type: DataTypes.INTEGER, allowNull: true },
+  paymentTestMode: { type: DataTypes.BOOLEAN, allowNull: true },
+  certificateId: { type: DataTypes.INTEGER, allowNull: true, references: { model: "gift_certificates", key: "id" }, onDelete: "RESTRICT" },
   deliveryAddress: { type: DataTypes.STRING, allowNull: true },
 
   // Provider info

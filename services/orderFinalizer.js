@@ -5,6 +5,7 @@ const OrderAttachment = require("../models/OrderAttachment");
 const { isCdekAutoShipmentEnabled } = require("../config/cdekAutomation");
 const { checkItemAndNotify } = require("./lowStockMonitor");
 const { commitReservationForOrder } = require("./inventoryReservations");
+const { GiftCertificateError } = require("../lib/giftCertificateRules");
 const {
   createCdekShipmentForOrder,
   markCdekShipmentAwaitingFulfillment,
@@ -36,6 +37,21 @@ const finalizePaidOrder = async ({
       lock: transaction.LOCK.UPDATE,
     });
     if (!order) return { ok: false, message: "Заказ не найден" };
+
+    if (order.certificateId && order.paymentStatus === "review") {
+      throw new GiftCertificateError("Оплата получена. Заказ требует ручной проверки сертификата", "paid_order_requires_review");
+    }
+    if (order.certificateId && provider === "paykeeper" && ["cancelled", "failed"].includes(order.paymentStatus)) {
+      throw new GiftCertificateError("Оплата отменённого заказа требует ручной проверки", "paid_cancelled_certificate_order");
+    }
+    if (provider === "certificate") {
+      if (!order.certificateId || order.amountDueKopecks !== 0 || Number(order.paymentAmount) !== 0
+        || order.deliveryAmountKopecks !== 0 || order.certificateDiscountKopecks !== order.merchandiseAmountKopecks
+        || order.paykeeperInvoiceId || !["pending", "paid"].includes(order.paymentStatus)
+        || (order.paymentStatus === "paid" && order.paymentProvider !== "certificate")) {
+        throw new GiftCertificateError("Этот заказ не покрыт сертификатом полностью", "certificate_order_not_covered", 409);
+      }
+    }
 
     const isManualFlow =
       provider === "manual" ||
@@ -69,6 +85,12 @@ const finalizePaidOrder = async ({
     }
 
     if (paymentConfirmed) {
+      if (provider === "certificate" && order.paymentStatus !== "paid") {
+        const { assertActiveReservation } = require("./inventoryReservations");
+        const { assertCertificateReservationForOrder } = require("./giftCertificates");
+        await assertActiveReservation(order.id, transaction);
+        await assertCertificateReservationForOrder({ order, transaction });
+      }
       order.paymentStatus = "paid";
       order.paymentProvider = provider;
       order.paykeeperPaymentId = overrides.paymentId || order.paykeeperPaymentId;
@@ -76,6 +98,10 @@ const finalizePaidOrder = async ({
     }
 
     const inventory = await commitReservationForOrder({ order, transaction });
+    if (order.certificateId) {
+      const { commitCertificateForOrder } = require("./giftCertificates");
+      await commitCertificateForOrder({ orderId: order.id, paymentConfirmed: order.paymentStatus === "paid", transaction });
+    }
     const overridePrice = Number(overrides.totalPrice);
     const hasNumericOverridePrice =
       overrides.totalPrice !== undefined && Number.isFinite(overridePrice) && overridePrice >= 0;

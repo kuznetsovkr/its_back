@@ -28,7 +28,7 @@ const getReservationTtlMs = () => {
   return minutes * 60 * 1000;
 };
 
-const createOrderWithReservation = async ({ inventoryId, orderValues, shipmentValues = null }) =>
+const createOrderWithReservation = async ({ inventoryId, orderValues, shipmentValues = null, preparePayment = null }) =>
   sequelize.transaction(async (transaction) => {
     const inventory = await Inventory.findByPk(inventoryId, {
       transaction,
@@ -49,6 +49,8 @@ const createOrderWithReservation = async ({ inventoryId, orderValues, shipmentVa
       status: RESERVATION_STATUS.ACTIVE,
       expiresAt: new Date(Date.now() + getReservationTtlMs()),
     }, { transaction });
+
+    if (preparePayment) await preparePayment({ order, reservation, transaction });
 
     if (shipmentValues) {
       await OrderShipment.create({
@@ -227,6 +229,10 @@ const releaseExpiredReservations = async ({ limit = 100 } = {}) => {
         order.paymentStatus = "expired";
         order.status = "Резерв истёк";
         await order.save({ transaction });
+      }
+      if (order?.certificateId) {
+        const { releaseCertificateForOrder } = require("./giftCertificates");
+        await releaseCertificateForOrder({ orderId: order.id, reason: "expired", transaction });
       }
       return inventory?.id || null;
     });

@@ -7,7 +7,7 @@ const Order = require("../models/Order");
 const { isPaykeeperTestMode, resolvePaykeeperAmount } = require("./paymentMode");
 const {
   CERTIFICATE_STATUS, GiftCertificateError, assertKopecks, certificateExpiresAt,
-  generateCertificateCode, getCertificateStatus, hashCertificateCode, validateCertificatePurchaseInput,
+  generateCertificateCode, getCertificateStatus, hashCertificateCode, planCertificatePayment, validateCertificatePurchaseInput,
 } = require("../lib/giftCertificateRules");
 const { encryptCertificateCode, decryptCertificateCode } = require("../lib/giftCertificateCodeVault");
 
@@ -53,6 +53,17 @@ const reservedByOtherOrders = async (certificateId, orderId, now, transaction) =
     }, transaction,
   }) || 0
 );
+
+// Preview only: the balance is reserved again atomically when the order is created.
+const quoteCertificateForOrder = async ({ code, productKopecks, deliveryKopecks }) => sequelize.transaction(async (transaction) => {
+  const certificate = await GiftCertificate.findOne({ where: { codeHash: hashCertificateCode(code) }, transaction, lock: transaction.LOCK.UPDATE });
+  const now = new Date();
+  assertRedeemable(certificate, now, isPaykeeperTestMode());
+  const availableKopecks = certificate.balanceKopecks - await reservedByOtherOrders(certificate.id, 0, now, transaction);
+  if (availableKopecks <= 0) throw new GiftCertificateError("Баланс сертификата зарезервирован в другом заказе. Попробуйте позже", "certificate_balance_reserved");
+  const plan = planCertificatePayment({ productKopecks, deliveryKopecks, availableKopecks });
+  return { ...plan, remainingKopecks: availableKopecks - plan.discountKopecks, expiresAt: certificate.expiresAt };
+});
 
 const createCertificatePurchase = async (body, transaction = null) => {
   const input = validateCertificatePurchaseInput(body);
@@ -178,7 +189,10 @@ const commitCertificateForOrder = async ({ orderId, paymentConfirmed, transactio
     throw new GiftCertificateError("Оплата заказа не подтверждена", "certificate_payment_unconfirmed", 403);
   }
   return inTransaction(transaction, async (tx) => {
-    const { certificate, reservation } = await lockOrderCertificateReservation(orderId, tx);
+    const { order, certificate, reservation } = await lockOrderCertificateReservation(orderId, tx);
+    if (order.certificateId && (!reservation || certificate?.id !== order.certificateId || reservation.amountKopecks !== order.certificateDiscountKopecks)) {
+      throw new GiftCertificateError("Сохранённая скидка сертификата требует проверки", "paid_order_certificate_mismatch", 422);
+    }
     if (!reservation) return null;
     if (reservation.status === "committed") return reservation;
     const now = new Date();
@@ -205,6 +219,17 @@ const commitCertificateForOrder = async ({ orderId, paymentConfirmed, transactio
   });
 };
 
+const assertCertificateReservationForOrder = async ({ order, transaction }) => {
+  if (!order.certificateId) return null;
+  const { certificate, reservation } = await lockOrderCertificateReservation(order.id, transaction);
+  if (!reservation || certificate?.id !== order.certificateId || reservation.amountKopecks !== order.certificateDiscountKopecks
+    || reservation.status !== "active" || new Date(reservation.expiresAt).getTime() <= Date.now()) {
+    throw new GiftCertificateError("Резерв сертификата истёк или требует проверки. Повторно платить не нужно", "certificate_reservation_inactive");
+  }
+  assertRedeemable(certificate, new Date(), reservation.testMode);
+  return reservation;
+};
+
 const releaseCertificateForOrder = async ({ orderId, reason = "cancelled", onlyIfExpired = false, transaction = null }) => {
   if (!["cancelled", "expired", "payment_failed"].includes(reason)) {
     throw new GiftCertificateError("Некорректная причина освобождения резерва", "invalid_certificate_release_reason", 422);
@@ -224,6 +249,7 @@ const releaseCertificateForOrder = async ({ orderId, reason = "cancelled", onlyI
 const releaseExpiredCertificateReservations = async () => {
   const candidates = await GiftCertificateReservation.findAll({
     where: { status: "active", expiresAt: { [Op.lte]: new Date() } }, attributes: ["orderId"],
+    order: [["expiresAt", "ASC"], ["id", "ASC"]], limit: 100,
   });
   for (const { orderId } of candidates) {
     await releaseCertificateForOrder({ orderId, reason: "expired", onlyIfExpired: true });
@@ -232,6 +258,7 @@ const releaseExpiredCertificateReservations = async () => {
 };
 
 module.exports = {
+  assertCertificateReservationForOrder, quoteCertificateForOrder,
   activateCertificate, commitCertificateForOrder, createCertificatePurchase,
   getCertificateCodeForDelivery, releaseCertificateForOrder,
   releaseExpiredCertificateReservations, reserveCertificateForOrder,

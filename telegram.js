@@ -218,6 +218,8 @@ const buildOrderMessage = (order) => {
     `📍 ${order.deliveryAddress || "-"}`,
     order.deliveryComment ? `🚚 ${order.deliveryComment}` : "",
     `💰 ${priceLabel(order)}`,
+    order.certificateDiscountKopecks > 0 ? `🎁 Сертификат #${order.certificateId}: ${(order.certificateDiscountKopecks / 100)} ₽` : "",
+    order.certificateDiscountKopecks > 0 ? `💳 Доплата: ${Number(order.paymentAmount)} ₽${order.paymentTestMode ? " (тест)" : ""}` : "",
     order.paidAt ? `✅ Оплачен: ${formatPaidAt(order.paidAt)}` : "",
     comment ? `💬 Комментарий:\n${comment}` : "",
   ].filter(Boolean).join("\n");

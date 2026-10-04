@@ -69,11 +69,19 @@ router.post("/link", requireOrderAccess, paymentLinkRateLimit, async (req, res) 
       if (order.paymentStatus === "paid") {
         return { status: 409, message: "Order already paid" };
       }
+      if (order.paymentStatus === "review") {
+        return { status: 409, message: "Оплата уже получена. Нужна проверка менеджером; повторно платить не нужно" };
+      }
       if (order.paymentProvider === "manual" || order.paymentStatus === "manual") {
         return { status: 409, message: "Оплата для этого заказа не требуется" };
       }
 
       await assertActiveReservation(order.id, transaction);
+      if (order.certificateId) {
+        const { assertCertificateReservationForOrder } = require("../services/giftCertificates");
+        await assertCertificateReservationForOrder({ order, transaction });
+      }
+      if (order.amountDueKopecks === 0) return { status: 409, message: "Заказ покрыт сертификатом: завершите его без банковской оплаты" };
       const orderAmount = Number(order.totalPrice);
       if (!Number.isFinite(orderAmount) || orderAmount <= 0) {
         return { status: 409, message: "Некорректная сумма заказа для оплаты" };
@@ -84,6 +92,7 @@ router.post("/link", requireOrderAccess, paymentLinkRateLimit, async (req, res) 
           invoice_id: order.paykeeperInvoiceId,
           pay_url: makePayUrl(order.paykeeperInvoiceId),
           payment_amount: Number(order.paymentAmount || orderAmount),
+          test_mode: order.paymentTestMode ?? Number(order.paymentAmount || orderAmount) !== orderAmount,
         };
       }
 
@@ -114,7 +123,7 @@ router.post("/link", requireOrderAccess, paymentLinkRateLimit, async (req, res) 
       return {
         ...invoice,
         payment_amount: paymentAmount,
-        test_mode: paymentAmount !== orderAmount,
+        test_mode: order.paymentTestMode ?? paymentAmount !== orderAmount,
       };
     });
 
@@ -123,7 +132,7 @@ router.post("/link", requireOrderAccess, paymentLinkRateLimit, async (req, res) 
     }
     return res.json(payment);
   } catch (error) {
-    if (error instanceof ReservationError) {
+    if (error instanceof ReservationError || error.name === "GiftCertificateError") {
       return res.status(error.statusCode).json({ message: error.message, code: error.code });
     }
     console.error("[PayKeeper] Payment-link creation failed:", error.message);
@@ -196,6 +205,7 @@ router.post(
       if (
         !Number.isFinite(expectedOrderAmount) ||
         !Number.isFinite(receivedAmount) ||
+        expectedOrderAmount <= 0 || order.amountDueKopecks === 0 ||
         Math.round(receivedAmount * 100) !== Math.round(expectedOrderAmount * 100)
       ) {
         console.warn("PayKeeper webhook: sum mismatch", {
@@ -203,6 +213,10 @@ router.post(
           sum: amount,
         });
         return res.status(400).send("Error! Sum mismatch");
+      }
+
+      if (order.paymentStatus === "review" && order.paykeeperPaymentId === paymentId) {
+        return res.send("OK " + crypto.createHash("md5").update(paymentId + secret).digest("hex"));
       }
 
       try {
@@ -220,7 +234,15 @@ router.post(
           throw new Error(finalized.message || "Order finalization failed");
         }
       } catch (error) {
-        if (error instanceof ReservationError && error.code === "paid_order_out_of_stock") {
+        if (order.certificateId && (error.name === "GiftCertificateError" ||
+          (error instanceof ReservationError && error.code === "paid_order_out_of_stock"))) {
+          const { recordCertificatePaymentReview } = require("../services/certificateOrderReview");
+          const notify = await recordCertificatePaymentReview({ orderId: order.id, paymentId });
+          if (notify) {
+            try { await sendOrderIssueToTelegram(order.toJSON(), "Оплата получена, но не удалось завершить резерв товара или списание сертификата. Нужна ручная проверка; повторно платить не нужно"); }
+            catch (_notificationError) { console.error("[certificate-order] Review notification failed", { orderId: order.id }); }
+          }
+        } else if (error instanceof ReservationError && error.code === "paid_order_out_of_stock") {
           const shouldNotify = order.status !== "Оплачен — требуется проверка остатка";
           await order.update({
             paymentStatus: "paid",

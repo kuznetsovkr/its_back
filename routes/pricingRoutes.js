@@ -3,6 +3,10 @@ const { MAX_PATRONUS_COUNT, MAX_PET_FACE_COUNT } = require("../lib/embroideryLim
 const requireTrustedOrigin = require("../middleware/trustedOrigin");
 const requireAdmin = require("../middleware/requireAdmin");
 const { pricingQuoteRateLimit } = require("../middleware/rateLimit");
+const { createRateLimiter } = require("../middleware/rateLimit");
+const { GiftCertificateError } = require("../lib/giftCertificateRules");
+const { quoteCertificateForOrder } = require("../services/giftCertificates");
+const { buildOrderPaymentSnapshot, publicOrderPayment, rublesToKopecks } = require("../services/orderCertificatePricing");
 const { findInventoryForOrder } = require("../services/inventoryResolver");
 const {
   PricingError,
@@ -25,12 +29,9 @@ const {
   getPricingExtras,
   updatePricingConfig,
 } = require("../services/pricingConfig");
-const {
-  isPaykeeperTestMode,
-  resolvePaykeeperAmount,
-} = require("../services/paymentMode");
 
 const router = express.Router();
+const certificateQuoteLimit = createRateLimiter({ windowMs: 15 * 60_000, max: 30, keyPrefix: "certificate-quote", message: "Слишком много проверок сертификата. Попробуйте позже" });
 const SIZE_GUIDE_KEYS = new Set(["tshirt", "hoodie", "svitshot"]);
 
 const readPricingConfig = (body) => {
@@ -169,7 +170,8 @@ router.post("/quote", requireTrustedOrigin, pricingQuoteRateLimit, async (req, r
   }
 });
 
-router.post("/checkout", requireTrustedOrigin, pricingQuoteRateLimit, async (req, res) => {
+router.post("/checkout", requireTrustedOrigin, pricingQuoteRateLimit,
+  (req, res, next) => req.body?.certificateCode ? certificateQuoteLimit(req, res, next) : next(), async (req, res) => {
   try {
     if (!req.is("application/json")) {
       return res.status(415).json({ message: "Content-Type должен быть application/json" });
@@ -186,6 +188,7 @@ router.post("/checkout", requireTrustedOrigin, pricingQuoteRateLimit, async (req
         "petFaceCount",
         "cdekMode",
         "cdekAddress",
+        "certificateCode",
       ]),
       "итоговом расчёте"
     );
@@ -202,6 +205,7 @@ router.post("/checkout", requireTrustedOrigin, pricingQuoteRateLimit, async (req
       : readPositiveInteger(body.patronusCount, "patronusCount", { max: MAX_PET_FACE_COUNT });
     const petFaceCount = readPetFaceCount(body.petFaceCount);
     const cdekMode = readString(body.cdekMode, "cdekMode", { max: 16 }).toLowerCase();
+    const certificateCode = readString(body.certificateCode, "certificateCode", { max: 80 });
     const cdekAddress = body.cdekAddress
       ? parseJsonObject(body.cdekAddress, "cdekAddress")
       : null;
@@ -221,6 +225,7 @@ router.post("/checkout", requireTrustedOrigin, pricingQuoteRateLimit, async (req
       pricingConfig,
     });
     if (merchandiseQuote.manual || !cdekMode) {
+      if (certificateCode) throw new GiftCertificateError("Сертификат можно применить после расчёта стоимости менеджером", "certificate_manual_price_pending", 400);
       return res.json({
         currency: "RUB",
         manual: true,
@@ -236,17 +241,23 @@ router.post("/checkout", requireTrustedOrigin, pricingQuoteRateLimit, async (req
       cdekAddress,
     });
     const totalPrice = merchandiseQuote.merchandisePrice + deliveryQuote.deliveryPrice;
+    const certificate = certificateCode ? await quoteCertificateForOrder({
+      code: certificateCode, productKopecks: rublesToKopecks(merchandiseQuote.merchandisePrice),
+      deliveryKopecks: rublesToKopecks(deliveryQuote.deliveryPrice, true),
+    }) : null;
+    const snapshot = buildOrderPaymentSnapshot({ merchandisePrice: merchandiseQuote.merchandisePrice, deliveryPrice: deliveryQuote.deliveryPrice, discountKopecks: certificate?.discountKopecks || 0 });
+    res.set("Cache-Control", "no-store");
     return res.json({
       currency: "RUB",
       manual: false,
       merchandisePrice: merchandiseQuote.merchandisePrice,
       deliveryPrice: deliveryQuote.deliveryPrice,
       totalPrice,
-      paymentAmount: resolvePaykeeperAmount(totalPrice),
-      paymentTestMode: isPaykeeperTestMode(),
+      ...publicOrderPayment({ ...snapshot, totalPrice }),
+      certificate: certificate ? { discount: certificate.discountKopecks / 100, remaining: certificate.remainingKopecks / 100, expiresAt: certificate.expiresAt } : null,
     });
   } catch (error) {
-    if (error instanceof PricingError || error instanceof RequestValidationError) {
+    if (error instanceof PricingError || error instanceof RequestValidationError || error instanceof GiftCertificateError) {
       return res.status(error.statusCode).json({
         message: error.message,
         code: error.code,

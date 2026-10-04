@@ -291,6 +291,98 @@ const run = async () => {
   assert.equal(finalAttempt.status, "failed");
   assert.equal(finalAttempt.attempts, 12);
   assert.equal(await processCertificateDeliveries({ send: async () => assert.fail("exhausted delivery must not retry") }), 0);
+  // Real order/inventory/certificate transactions; all external effects are stubbed.
+  const mockModule = (request, exports) => {
+    const filename = require.resolve(request);
+    require.cache[filename] = { id: filename, filename, loaded: true, exports };
+  };
+  mockModule("../telegram", async () => {});
+  mockModule("../services/lowStockMonitor", { checkItemAndNotify: async () => {} });
+  process.env.ENABLE_CDEK_AUTO_SHIPMENT = "0";
+  process.env.PAYKEEPER_TEST_MODE = "0";
+  const { finalizePaidOrder } = require("../services/orderFinalizer");
+  const { createOrderWithReservation, releaseExpiredReservations, releaseReservationForOrder } = require("../services/inventoryReservations");
+  const { buildOrderPaymentSnapshot } = require("../services/orderCertificatePricing");
+  const { quoteCertificateForOrder } = require("../services/giftCertificates");
+  const { recordCertificatePaymentReview } = require("../services/certificateOrderReview");
+  const Inventory = require("../models/Inventory");
+  const StockReservation = require("../models/InventoryReservation");
+  const inventory = await Inventory.create({ productType: "Certificate fixture", color: "fixture", size: "M", quantity: 30 });
+  const checkoutOrder = async (code, merchandisePrice, deliveryPrice = 0, failAfterReserve = false) => {
+    const snapshot = buildOrderPaymentSnapshot({ merchandisePrice, deliveryPrice });
+    return createOrderWithReservation({ inventoryId: inventory.id,
+      orderValues: { firstName: "Тестовый", lastName: "Покупатель", phone: "+79991234567", productType: inventory.productType,
+        color: inventory.color, size: inventory.size, embroideryType: "Car", totalPrice: merchandisePrice + deliveryPrice,
+        paymentStatus: "pending", status: "Ожидание оплаты", ...snapshot },
+      preparePayment: async ({ order, reservation: stock, transaction }) => {
+        const hold = await reserveCertificateForOrder({ orderId: order.id, code, productAmountKopecks: snapshot.merchandiseAmountKopecks, expiresAt: stock.expiresAt, transaction });
+        await order.update({ ...buildOrderPaymentSnapshot({ merchandisePrice, deliveryPrice, discountKopecks: hold.amountKopecks }), certificateId: hold.certificateId }, { transaction });
+        if (failAfterReserve) throw new Error("fixture creation rollback");
+      },
+    });
+  };
+  const freeCertificate = await issue();
+  await assert.rejects(checkoutOrder(freeCertificate.code, 500, 0, true), /creation rollback/);
+  await inventory.reload();
+  assert.equal(inventory.quantity, 30);
+  assert.equal(await GiftCertificateReservation.count({ where: { certificateId: freeCertificate.certificate.id } }), 0);
+  const free = await checkoutOrder(freeCertificate.code, 500);
+  assert.equal(free.order.paymentAmount, 0);
+  const completions = await Promise.all([1, 2, 3].map(() => finalizePaidOrder({ orderId: free.order.id, provider: "certificate", paymentConfirmed: true, eventId: `certificate-${free.order.id}` })));
+  assert.equal(completions.filter((result) => !result.alreadyProcessed).length, 1);
+  await freeCertificate.certificate.reload();
+  assert.equal(freeCertificate.certificate.balanceKopecks, 50000);
+  assert.equal((await StockReservation.findOne({ where: { orderId: free.order.id } })).status, "committed");
+  const deliveryOrder = await checkoutOrder(freeCertificate.code, 500, 90);
+  assert.equal(Number(deliveryOrder.order.paymentAmount), 90, "delivery must still be paid even when all merchandise is covered");
+  await assert.rejects(finalizePaidOrder({ orderId: deliveryOrder.order.id, provider: "certificate", paymentConfirmed: true }), { code: "certificate_order_not_covered" });
+  await finalizePaidOrder({ orderId: deliveryOrder.order.id, provider: "paykeeper", paymentConfirmed: true, eventId: "fixture-order-bank", overrides: { paymentId: "fixture-order-bank" } });
+  await finalizePaidOrder({ orderId: deliveryOrder.order.id, provider: "paykeeper", paymentConfirmed: true, eventId: "fixture-order-bank" });
+  await freeCertificate.certificate.reload();
+  assert.equal(freeCertificate.certificate.balanceKopecks, 0);
+  assert.equal(await GiftCertificateOperation.count({ where: { orderId: deliveryOrder.order.id, type: "debit" } }), 1);
+  await releaseCertificateForOrder({ orderId: deliveryOrder.order.id, reason: "cancelled" });
+  await freeCertificate.certificate.reload();
+  assert.equal(freeCertificate.certificate.balanceKopecks, 0, "paid cancellations must not automatically refund the certificate");
+
+  const raceCertificate = await issue();
+  const racers = await Promise.all([checkoutOrder(raceCertificate.code, 800, 90), checkoutOrder(raceCertificate.code, 800, 90)]);
+  assert.deepEqual(racers.map(({ order }) => order.certificateDiscountKopecks).sort((a, b) => a - b), [20000, 80000]);
+  await Promise.all(racers.map(({ order }) => finalizePaidOrder({ orderId: order.id, provider: "paykeeper", paymentConfirmed: true, eventId: `fixture-race-${order.id}` })));
+  await raceCertificate.certificate.reload();
+  assert.equal(raceCertificate.certificate.balanceKopecks, 0);
+
+  const lateCertificate = await issue();
+  const lateCheckout = await checkoutOrder(lateCertificate.code, 800, 90);
+  await StockReservation.update({ expiresAt: new Date(Date.now() - 1000) }, { where: { orderId: lateCheckout.order.id } });
+  await GiftCertificateReservation.update({ expiresAt: new Date(Date.now() - 1000) }, { where: { orderId: lateCheckout.order.id } });
+  await releaseExpiredReservations();
+  await releaseExpiredCertificateReservations();
+  const newer = await checkoutOrder(lateCertificate.code, 1000);
+  await finalizePaidOrder({ orderId: newer.order.id, provider: "certificate", paymentConfirmed: true, eventId: `certificate-${newer.order.id}` });
+  await inventory.reload();
+  const stockBeforeLate = inventory.quantity;
+  await assert.rejects(finalizePaidOrder({ orderId: lateCheckout.order.id, provider: "paykeeper", paymentConfirmed: true, eventId: "fixture-late" }));
+  await inventory.reload();
+  assert.equal(inventory.quantity, stockBeforeLate, "failed debit must roll back reacquired stock too");
+  assert.equal(await GiftCertificateOperation.count({ where: { orderId: lateCheckout.order.id, type: "debit" } }), 0);
+  assert.equal(await recordCertificatePaymentReview({ orderId: lateCheckout.order.id, paymentId: "fixture-late" }), true);
+  assert.equal(await recordCertificatePaymentReview({ orderId: lateCheckout.order.id, paymentId: "fixture-late" }), false);
+  await lateCheckout.order.reload();
+  assert.equal(lateCheckout.order.paymentStatus, "review");
+  await assert.rejects(finalizePaidOrder({ orderId: lateCheckout.order.id, provider: "fallback" }), { code: "paid_order_requires_review" });
+
+  const cancelCertificate = await issue();
+  const cancelled = await checkoutOrder(cancelCertificate.code, 500);
+  await sequelize.transaction(async (transaction) => {
+    await Order.findByPk(cancelled.order.id, { transaction, lock: transaction.LOCK.UPDATE });
+    await releaseReservationForOrder(cancelled.order.id, "cancelled", transaction);
+    await releaseCertificateForOrder({ orderId: cancelled.order.id, reason: "cancelled", transaction });
+    await cancelled.order.update({ paymentStatus: "cancelled", status: "Отменен" }, { transaction });
+  });
+  assert.equal((await quoteCertificateForOrder({ code: cancelCertificate.code, productKopecks: 100000, deliveryKopecks: 9000 })).discountKopecks, 100000);
+  await assert.rejects(finalizePaidOrder({ orderId: cancelled.order.id, provider: "certificate", paymentConfirmed: true }), { code: "certificate_order_not_covered" });
+  console.log("[certificate-test] Order creation rollback, free/partial checkout, concurrent debits, cancellation and late-payment review passed");
   console.log("[certificate-test] Checkout idempotency, invoice recovery, callback outbox, concurrent delivery and email retries passed");
   console.log("[certificate-test] Payment replay, row-lock concurrency, reservation expiry, rollback and test-mode isolation passed");
 };
