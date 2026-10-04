@@ -66,6 +66,9 @@ const getApplicationTables = async () => {
 const expectedTables = [
   "clothingTypes",
   "colors",
+  "gift_certificates",
+  "gift_certificate_operations",
+  "gift_certificate_reservations",
   "inventories",
   "inventory_reservations",
   "low_stock_alerts",
@@ -158,6 +161,16 @@ const run = async () => {
   runCli(["db:migrate"]);
   assertExpectedTables(await getApplicationTables());
   await assertCatalogProfilesMigrated();
+
+  const certificateCheck = spawnSync(process.execPath, ["scripts/verify-certificate-balances.js"], {
+    cwd: process.cwd(),
+    env: { ...process.env, NODE_ENV: "test", DB_NAME: testDatabaseName },
+    encoding: "utf8", timeout: 120_000,
+  });
+  if (certificateCheck.stdout) process.stdout.write(certificateCheck.stdout);
+  if (certificateCheck.stderr) process.stderr.write(certificateCheck.stderr);
+  if (certificateCheck.error) throw certificateCheck.error;
+  if (certificateCheck.status !== 0) throw new Error("Certificate integration checks failed");
 
   runCli(["db:migrate:undo:all"]);
   const tablesAfterRollback = await getApplicationTables();

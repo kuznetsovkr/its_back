@@ -1,5 +1,11 @@
 # ITS staging operations
 
+## Gift certificates
+
+See [gift certificate rules and implementation stages](../docs/gift-certificates.md).
+The first stage adds isolated accounting tables and transaction-safe balance
+services; it does not enable certificate purchases, payment callbacks or delivery.
+
 ## Browser tests before deployment
 
 The staging deploy script runs the frontend Playwright suite before creating

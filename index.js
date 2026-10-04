@@ -40,6 +40,9 @@ require("./models/OrderAttachment");
 require("./models/InventoryReservation");
 require("./models/OrderShipment");
 require("./models/PricingConfig");
+require("./models/GiftCertificate");
+require("./models/GiftCertificateReservation");
+require("./models/GiftCertificateOperation");
 
 const ENABLE_LOW_STOCK_CRON = process.env.ENABLE_LOW_STOCK_CRON === "1";
 const ENABLE_RESERVATION_CRON = process.env.ENABLE_RESERVATION_CRON !== "0";
