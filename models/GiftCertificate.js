@@ -20,11 +20,15 @@ module.exports = sequelize.define("gift_certificate", {
   expiresAt: { type: DataTypes.DATE, allowNull: true },
   codeHash: { type: DataTypes.STRING(64), allowNull: true },
   codeEncrypted: { type: DataTypes.STRING(512), allowNull: true },
+  purchaseRequestHash: { type: DataTypes.STRING(64), allowNull: true },
+  checkoutInputHash: { type: DataTypes.STRING(64), allowNull: true },
+  invoiceRequestedAt: { type: DataTypes.DATE, allowNull: true },
 }, {
   indexes: [
     { unique: true, fields: ["codeHash"] },
     { unique: true, fields: ["paykeeperInvoiceId"] },
     { unique: true, fields: ["paykeeperPaymentId"] },
+    { unique: true, fields: ["purchaseRequestHash"] },
     { fields: ["status", "expiresAt"] },
   ],
 });

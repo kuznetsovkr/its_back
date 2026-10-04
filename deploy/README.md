@@ -3,8 +3,9 @@
 ## Gift certificates
 
 See [gift certificate rules and implementation stages](../docs/gift-certificates.md).
-The first stage adds isolated accounting tables and transaction-safe balance
-services; it does not enable certificate purchases, payment callbacks or delivery.
+Accounting, purchase UI, PayKeeper callbacks and an email delivery outbox are
+implemented. New purchases remain disabled until SMTP is configured and tested.
+Keep `CERTIFICATE_PURCHASE_ENABLED=0` until redemption is implemented too.
 
 ## Browser tests before deployment
 

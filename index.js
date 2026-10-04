@@ -29,6 +29,9 @@ const { assertDatabaseMigrationsCurrent } = require("./services/databaseMigratio
 const { isClientAppRoute } = require("./config/clientRoutes");
 const { validateRuntimeConfig } = require("./config/runtimeConfig");
 const { isCdekAutoShipmentEnabled } = require("./config/cdekAutomation");
+const { createCertificateRouter } = require("./routes/certificateRoutes");
+const { getCertificateMailConfig, assertCertificateCheckoutConfigured, isCertificatePurchaseEnabled } = require("./config/certificateCheckout");
+const { processCertificateDeliveries } = require("./services/certificateDelivery");
 const {
   TELEGRAM_CHANNELS,
   getTelegramChannelConfig,
@@ -43,6 +46,7 @@ require("./models/PricingConfig");
 require("./models/GiftCertificate");
 require("./models/GiftCertificateReservation");
 require("./models/GiftCertificateOperation");
+require("./models/GiftCertificateDelivery");
 
 const ENABLE_LOW_STOCK_CRON = process.env.ENABLE_LOW_STOCK_CRON === "1";
 const ENABLE_RESERVATION_CRON = process.env.ENABLE_RESERVATION_CRON !== "0";
@@ -51,6 +55,7 @@ const ENABLE_CDEK_AUTO_SHIPMENT = isCdekAutoShipmentEnabled();
 const ENABLE_STARTUP_WARNINGS = process.env.ENABLE_STARTUP_WARNINGS === "1";
 
 validateRuntimeConfig(process.env);
+if (isCertificatePurchaseEnabled()) assertCertificateCheckoutConfigured();
 
 const orderTelegramConfig = getTelegramChannelConfig(TELEGRAM_CHANNELS.ORDERS);
 const lowStockTelegramConfig = getTelegramChannelConfig(TELEGRAM_CHANNELS.LOW_STOCK);
@@ -79,6 +84,7 @@ app.use(express.json({ limit: "64kb", strict: true }));
 
 app.use("/api/auth", authRoutes);
 app.use("/api/public-config", publicConfigRoutes);
+app.use("/api/certificates", createCertificateRouter());
 app.use("/api/orders", orderRoutes);
 app.use("/api/inventory", inventoryRoutes);
 app.use("/api/clothing-types", clothingTypeRoutes);
@@ -137,6 +143,22 @@ const start = async () => {
     await clearTemporaryUploads();
     await sequelize.authenticate();
     await assertDatabaseMigrationsCurrent(sequelize);
+
+    // Also drain previously-paid purchases while new purchases are disabled.
+    if (getCertificateMailConfig()) {
+      let certificateMailRunning = false;
+      const deliverCertificates = async () => {
+        if (certificateMailRunning) return;
+        certificateMailRunning = true;
+        try { await processCertificateDeliveries(); }
+        finally { certificateMailRunning = false; }
+      };
+      deliverCertificates().catch(() => console.error("[certificate-mail] Initial worker failed"));
+      cron.schedule("* * * * *", async () => {
+        try { await deliverCertificates(); }
+        catch (_error) { console.error("[certificate-mail] Worker failed"); }
+      });
+    }
 
     if (ENABLE_LOW_STOCK_CRON) {
       checkAllAndNotify().catch((e) => console.error("Initial low-stock check error:", e));

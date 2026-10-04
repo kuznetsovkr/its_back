@@ -10,6 +10,8 @@ const sequelize = require("../db");
 const Order = require("../models/Order");
 const GiftCertificateReservation = require("../models/GiftCertificateReservation");
 const GiftCertificateOperation = require("../models/GiftCertificateOperation");
+const GiftCertificate = require("../models/GiftCertificate");
+const GiftCertificateDelivery = require("../models/GiftCertificateDelivery");
 const {
   activateCertificate, commitCertificateForOrder, createCertificatePurchase,
   getCertificateCodeForDelivery, releaseCertificateForOrder, releaseExpiredCertificateReservations,
@@ -181,6 +183,115 @@ const run = async () => {
   const liveOrder = await newOrder();
   await assert.rejects(reserve(liveOrder, testPurchase.code, 100_000), { code: "certificate_mode_mismatch" });
   await commit(testOrder); // An earlier test invoice retains its original mode.
+
+  Object.assign(process.env, {
+    CERTIFICATE_PURCHASE_ENABLED: "1", CERTIFICATE_ACCESS_SECRET: crypto.randomBytes(32).toString("hex"),
+    CERTIFICATE_SMTP_HOST: "smtp.example.com", CERTIFICATE_SMTP_PORT: "465",
+    CERTIFICATE_SMTP_USER: "fixture", CERTIFICATE_SMTP_PASSWORD: "fixture",
+    CERTIFICATE_MAIL_FROM: "sender@example.com", PAYKEEPER_BASE_URL: "https://pay.example.com",
+    PAYKEEPER_LOGIN: "fixture", PAYKEEPER_PASSWORD: "fixture", PAYKEEPER_SECRET_SEED: "fixture-paykeeper-secret",
+    TURNSTILE_ENABLED: "0",
+  });
+  // No real network calls: only this child verifier replaces mail/gateway adapters.
+  const gateway = require("../lib/paykeeper");
+  const remoteInvoices = [];
+  let invoiceRequests = 0;
+  let loseNextResponse = false;
+  gateway.createInvoice = async (payload) => {
+    invoiceRequests += 1;
+    const remote = { id: "checkout-fixture-" + invoiceRequests, orderid: payload.orderid, pay_amount: payload.pay_amount, status: "created" };
+    remoteInvoices.push(remote);
+    if (loseNextResponse) { loseNextResponse = false; throw new Error("fixture ambiguous gateway timeout"); }
+    return { invoice_id: remote.id };
+  };
+  gateway.searchInvoices = async () => remoteInvoices;
+  require("../services/certificateMail").verifyCertificateMail = async () => true;
+  const checkout = require("../services/certificateCheckout");
+  const { processCertificateDeliveries, queueCertificateDelivery } = require("../services/certificateDelivery");
+  const createArgs = { body: { ...buyer, denomination: 2000 }, requestKey: crypto.randomUUID(), remoteIp: "127.0.0.1" };
+  const firstPurchase = await checkout.beginCertificateCheckout(createArgs);
+  const repeatedPurchase = await checkout.beginCertificateCheckout(createArgs);
+  assert.equal(firstPurchase.certificateId, repeatedPurchase.certificateId);
+  assert.notEqual(firstPurchase.certificateToken, repeatedPurchase.certificateToken);
+  await assert.rejects(checkout.beginCertificateCheckout({ ...createArgs, body: { ...createArgs.body, denomination: 1000 } }), { code: "certificate_checkout_conflict" });
+  await assert.rejects(checkout.beginCertificateCheckout({ ...createArgs, body: { ...createArgs.body, paymentAmountKopecks: 1 } }));
+  const concurrentArgs = { ...createArgs, requestKey: crypto.randomUUID() };
+  const simultaneousPurchases = await Promise.all([checkout.beginCertificateCheckout(concurrentArgs), checkout.beginCertificateCheckout(concurrentArgs)]);
+  assert.equal(simultaneousPurchases[0].certificateId, simultaneousPurchases[1].certificateId);
+  await Promise.all([checkout.createCertificatePaymentLink(firstPurchase.certificateId), checkout.createCertificatePaymentLink(firstPurchase.certificateId)]);
+  assert.equal(invoiceRequests, 1);
+  assert.equal(remoteInvoices[0].orderid, "certificate-" + firstPurchase.certificateId);
+  assert.equal(remoteInvoices[0].pay_amount, "2000.00");
+  const confirmed = { certificateId: firstPurchase.certificateId, paymentId: "checkout-fixture-payment", amountKopecks: 200000 };
+  await assert.rejects(checkout.handleCertificatePaykeeperCallback({ ...confirmed, amountKopecks: 100 }), { code: "certificate_payment_amount_mismatch" });
+  assert.equal(await GiftCertificateDelivery.count(), 0);
+  await Promise.all([checkout.handleCertificatePaykeeperCallback(confirmed), checkout.handleCertificatePaykeeperCallback(confirmed)]);
+  assert.equal(await GiftCertificateDelivery.count(), 1, "payment replay must not queue multiple emails");
+  assert.equal(await GiftCertificateOperation.count({ where: { certificateId: firstPurchase.certificateId, type: "issue" } }), 1);
+  const receipt = await checkout.getCertificatePurchaseStatus(firstPurchase.certificateId);
+  assert.equal(receipt.paid, true);
+  assert.equal(receipt.emailDelivery, "pending");
+  for (const field of ["code", "codeHash", "codeEncrypted", "buyerEmail", "buyerPhone", "certificateToken"]) {
+    assert.equal(receipt[field], undefined, "receipt must not leak " + field);
+  }
+  await processCertificateDeliveries({ send: async () => { const error = new Error("fixture mail unavailable"); error.code = "ECONNECTION"; throw error; } });
+  const job = await GiftCertificateDelivery.findOne({ where: { certificateId: firstPurchase.certificateId } });
+  assert.equal(job.status, "pending"); assert.equal(job.attempts, 1);
+  assert.equal((await checkout.getCertificatePurchaseStatus(firstPurchase.certificateId)).paid, true);
+  const retryAt = job.nextAttemptAt.getTime();
+  await checkout.handleCertificatePaykeeperCallback(confirmed);
+  await job.reload();
+  assert.equal(job.nextAttemptAt.getTime(), retryAt, "payment replay must not reset mail backoff");
+  await job.update({ nextAttemptAt: new Date(Date.now() - 1000) });
+  const emails = [];
+  const send = async (certificate, code) => { emails.push({ id: certificate.id, email: certificate.buyerEmail, code }); };
+  await Promise.all([processCertificateDeliveries({ send, maxJobs: 1 }), processCertificateDeliveries({ send, maxJobs: 1 })]);
+  assert.equal(emails.length, 1, "parallel workers must claim a delivery only once");
+  assert.equal(emails[0].email, buyer.email);
+  const issuedCertificate = await GiftCertificate.findByPk(firstPurchase.certificateId);
+  assert.equal(emails[0].code, getCertificateCodeForDelivery(issuedCertificate));
+  assert.equal((await checkout.getCertificatePurchaseStatus(firstPurchase.certificateId)).emailDelivery, "sent");
+  await checkout.handleCertificatePaykeeperCallback(confirmed);
+  await processCertificateDeliveries({ send });
+  assert.equal(emails.length, 1, "a sent email must not be re-sent by payment replay");
+
+  const uncertain = await checkout.beginCertificateCheckout({ ...createArgs, requestKey: crypto.randomUUID() });
+  loseNextResponse = true;
+  await assert.rejects(checkout.createCertificatePaymentLink(uncertain.certificateId), /ambiguous gateway timeout/);
+  const recoveredLink = await checkout.createCertificatePaymentLink(uncertain.certificateId);
+  assert.equal(invoiceRequests, 2, "a lost response must recover rather than create a new invoice");
+  assert.match(recoveredLink.pay_url, /checkout-fixture-2/);
+  const interrupted = await checkout.beginCertificateCheckout({ ...createArgs, requestKey: crypto.randomUUID() });
+  await GiftCertificate.update({ invoiceRequestedAt: new Date() }, { where: { id: interrupted.certificateId } });
+  await assert.rejects(checkout.createCertificatePaymentLink(interrupted.certificateId), { code: "certificate_invoice_uncertain" });
+  assert.equal(invoiceRequests, 2, "an ambiguous empty lookup must not create another invoice");
+
+  await checkout.handleCertificatePaykeeperCallback({ certificateId: uncertain.certificateId, paymentId: "checkout-fixture-payment-2", amountKopecks: 200000 });
+  const abandonedJob = await GiftCertificateDelivery.findOne({ where: { certificateId: uncertain.certificateId } });
+  await abandonedJob.update({ status: "sending", attempts: 1, lockedUntil: new Date(Date.now() - 1000) });
+  await processCertificateDeliveries({ send });
+  await abandonedJob.reload();
+  assert.equal(abandonedJob.status, "sent", "a crashed worker lease must be recoverable");
+  assert.equal(emails.length, 2);
+  const atomicPurchase = await checkout.beginCertificateCheckout({ ...createArgs, requestKey: crypto.randomUUID() });
+  await checkout.createCertificatePaymentLink(atomicPurchase.certificateId);
+  const atomicConfirmation = { certificateId: atomicPurchase.certificateId, paymentId: "checkout-fixture-atomic-payment", amountKopecks: 200000 };
+  await assert.rejects(sequelize.transaction(async (transaction) => {
+    const { certificate } = await activateCertificate({ ...atomicConfirmation, paymentConfirmed: true, transaction });
+    await queueCertificateDelivery(certificate.id, transaction);
+    throw new Error("fixture failure after queuing email");
+  }), /failure after queuing email/);
+  assert.equal((await GiftCertificate.findByPk(atomicPurchase.certificateId)).paidAt, null);
+  assert.equal(await GiftCertificateDelivery.count({ where: { certificateId: atomicPurchase.certificateId } }), 0);
+  await checkout.handleCertificatePaykeeperCallback(atomicConfirmation);
+  const finalAttempt = await GiftCertificateDelivery.findOne({ where: { certificateId: atomicPurchase.certificateId } });
+  await finalAttempt.update({ attempts: 11 });
+  await processCertificateDeliveries({ send: async () => { throw new Error("fixture final mail failure"); } });
+  await finalAttempt.reload();
+  assert.equal(finalAttempt.status, "failed");
+  assert.equal(finalAttempt.attempts, 12);
+  assert.equal(await processCertificateDeliveries({ send: async () => assert.fail("exhausted delivery must not retry") }), 0);
+  console.log("[certificate-test] Checkout idempotency, invoice recovery, callback outbox, concurrent delivery and email retries passed");
   console.log("[certificate-test] Payment replay, row-lock concurrency, reservation expiry, rollback and test-mode isolation passed");
 };
 

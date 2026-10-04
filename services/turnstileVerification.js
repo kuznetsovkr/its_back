@@ -62,6 +62,7 @@ const invalidChallenge = () => new TurnstileVerificationError(
 
 const createTurnstileVerifier = ({
   env = process.env,
+  action = TURNSTILE_ACTION,
   post = (url, body, options) => axios.post(url, body, options),
   createIdempotencyKey = randomUUID,
 } = {}) => async ({ token, remoteIp } = {}) => {
@@ -116,7 +117,7 @@ const createTurnstileVerifier = ({
     .replace(/\.$/, "");
   if (
     verification?.success !== true ||
-    verification?.action !== TURNSTILE_ACTION ||
+    verification?.action !== action ||
     !expectedHostnames.has(hostname)
   ) {
     throw invalidChallenge();

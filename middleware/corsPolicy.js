@@ -76,7 +76,7 @@ const createCorsMiddleware = (env = process.env) => {
       return callback(error);
     },
     methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Accept", "Authorization", "Content-Type", "X-Order-Access-Token"],
+    allowedHeaders: ["Accept", "Authorization", "Content-Type", "X-Order-Access-Token", "X-Certificate-Access-Token", "Idempotency-Key"],
     exposedHeaders: [
       "RateLimit-Limit",
       "RateLimit-Remaining",

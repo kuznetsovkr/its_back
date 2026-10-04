@@ -8,6 +8,7 @@ const ORDER_ID = 42;
 const ORDER_TOTAL = 6100;
 const finalizedPayments = [];
 const createdInvoices = [];
+const certificatePayments = [];
 
 const order = {
   id: ORDER_ID,
@@ -61,6 +62,15 @@ mockModule("../middleware/orderAccess", {
 mockModule("../middleware/rateLimit", {
   paymentCallbackRateLimit: (_req, _res, next) => next(),
   paymentLinkRateLimit: (_req, _res, next) => next(),
+});
+mockModule("../services/certificateCheckout", {
+  handleCertificatePaykeeperCallback: async (payload) => {
+    if (payload.paymentId === "fixture-private-error") throw new Error("fixture-private-certificate-material");
+    if (payload.amountKopecks !== 100) {
+      const error = new Error("Invalid amount"); error.code = "certificate_payment_amount_mismatch"; error.statusCode = 400; throw error;
+    }
+    certificatePayments.push(payload);
+  },
 });
 
 delete require.cache[require.resolve("../routes/payments.paykeeper")];
@@ -213,4 +223,34 @@ test("PayKeeper callback verifies its signature and server-side order amount", a
   });
   assert.equal(testAmountResponse.status, 200);
   assert.equal(finalizedPayments.length, 3);
+});
+
+test("PayKeeper dispatches only signed certificate callbacks and rejects their wrong amount", async (t) => {
+  const previous = process.env.PAYKEEPER_SECRET_SEED;
+  const previousConsoleError = console.error;
+  const loggedErrors = [];
+  console.error = (...args) => loggedErrors.push(args);
+  process.env.PAYKEEPER_SECRET_SEED = SECRET;
+  const app = express();
+  app.use("/pk", paykeeperRouter);
+  const server = await new Promise((resolve) => { const listener = app.listen(0, "127.0.0.1", () => resolve(listener)); });
+  t.after(async () => {
+    console.error = previousConsoleError;
+    if (previous === undefined) delete process.env.PAYKEEPER_SECRET_SEED; else process.env.PAYKEEPER_SECRET_SEED = previous;
+    await new Promise((resolve) => server.close(resolve));
+  });
+  const send = (overrides) => fetch("http://127.0.0.1:" + server.address().port + "/pk/callback", {
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: callbackBody({ orderid: "certificate-42", sum: "1.00", ...overrides }),
+  });
+  const before = finalizedPayments.length;
+  assert.equal((await send({})).status, 200);
+  assert.deepEqual(certificatePayments, [{ certificateId: 42, paymentId: "payment-test-1", amountKopecks: 100 }]);
+  assert.equal((await send({ key: "0".repeat(32) })).status, 400);
+  assert.equal((await send({ sum: "2.00" })).status, 400);
+  assert.equal((await send({ id: "fixture-private-error" })).status, 500);
+  assert.equal(JSON.stringify(loggedErrors).includes("fixture-private-certificate-material"), false);
+  assert.equal(loggedErrors.length, 1);
+  assert.equal(certificatePayments.length, 1);
+  assert.equal(finalizedPayments.length, before);
 });

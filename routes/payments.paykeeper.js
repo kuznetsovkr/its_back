@@ -152,14 +152,15 @@ router.post(
         !/^[A-Za-z0-9_-]{1,64}$/.test(paymentId) ||
         !/^\d{1,12}(?:\.\d{1,2})?$/.test(amount) ||
         customerId.length > 200 ||
-        !/^\d{1,10}$/.test(rawOrderId) ||
+        !/^(?:certificate-)?\d{1,10}$/.test(rawOrderId) ||
         secret.length < 16
       ) {
         return res.status(400).send("Error! Invalid callback data");
       }
 
-      const parsedOrderId = Number(rawOrderId);
-      if (!Number.isSafeInteger(parsedOrderId) || parsedOrderId < 1) {
+      const isCertificate = rawOrderId.startsWith("certificate-");
+      const parsedOrderId = Number(isCertificate ? rawOrderId.slice(12) : rawOrderId);
+      if (!Number.isSafeInteger(parsedOrderId) || parsedOrderId < 1 || parsedOrderId > 2_147_483_647) {
         return res.status(400).send("Error! Bad orderid");
       }
 
@@ -170,6 +171,21 @@ router.post(
       if (!safeHexEqual(key, expectedSignature)) {
         console.warn("PayKeeper webhook: bad signature", { orderid: rawOrderId, id: paymentId });
         return res.status(400).send("Error! Hash mismatch");
+      }
+
+      if (isCertificate) {
+        const { handleCertificatePaykeeperCallback } = require("../services/certificateCheckout");
+        try {
+          await handleCertificatePaykeeperCallback({
+            certificateId: parsedOrderId, paymentId, amountKopecks: Math.round(Number(amount) * 100),
+          });
+        } catch (error) {
+          if (error.statusCode && error.code) return res.status(error.statusCode).send("Error! Certificate payment rejected");
+          // Database/vault errors may include private certificate material.
+          console.error("[certificate-checkout] Payment confirmation failed", { certificateId: parsedOrderId });
+          return res.status(500).send("Error");
+        }
+        return res.send("OK " + crypto.createHash("md5").update(paymentId + secret).digest("hex"));
       }
 
       const order = await Order.findByPk(parsedOrderId);

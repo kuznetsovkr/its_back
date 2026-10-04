@@ -112,6 +112,21 @@ test("Turnstile fails closed when Siteverify is unavailable", async () => {
   );
 });
 
+test("certificate Turnstile verification cannot reuse an order challenge", async () => {
+  let returnedAction = TURNSTILE_ACTION;
+  const verify = createTurnstileVerifier({
+    env: enabledEnv(),
+    action: "certificate_purchase",
+    post: async () => ({ data: {
+      success: true, hostname: "stage.its-site.ru", action: returnedAction,
+    } }),
+  });
+  await assert.rejects(verify({ token: "order-token" }),
+    (error) => error.code === "turnstile_failed");
+  returnedAction = "certificate_purchase";
+  assert.equal((await verify({ token: "certificate-token" })).success, true);
+});
+
 test("public Turnstile config never exposes the secret", () => {
   const config = getPublicTurnstileConfig(enabledEnv());
   assert.deepEqual(config, {

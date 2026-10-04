@@ -67,6 +67,7 @@ const expectedTables = [
   "clothingTypes",
   "colors",
   "gift_certificates",
+  "gift_certificate_deliveries",
   "gift_certificate_operations",
   "gift_certificate_reservations",
   "inventories",
