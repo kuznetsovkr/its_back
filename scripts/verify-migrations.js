@@ -64,6 +64,9 @@ const getApplicationTables = async () => {
 };
 
 const expectedTables = [
+  "carts",
+  "cart_items",
+  "cart_attachments",
   "clothingTypes",
   "colors",
   "gift_certificates",
@@ -172,6 +175,15 @@ const run = async () => {
   if (certificateCheck.stderr) process.stderr.write(certificateCheck.stderr);
   if (certificateCheck.error) throw certificateCheck.error;
   if (certificateCheck.status !== 0) throw new Error("Certificate integration checks failed");
+
+  const cartCheck = spawnSync(process.execPath, ["scripts/verify-cart-storage.js"], {
+    cwd: process.cwd(), env: { ...process.env, NODE_ENV: "test", DB_NAME: testDatabaseName },
+    encoding: "utf8", timeout: 120_000,
+  });
+  if (cartCheck.stdout) process.stdout.write(cartCheck.stdout);
+  if (cartCheck.stderr) process.stderr.write(cartCheck.stderr);
+  if (cartCheck.error) throw cartCheck.error;
+  if (cartCheck.status !== 0) throw new Error("Cart integration checks failed");
 
   runCli(["db:migrate:undo:all"]);
   const tablesAfterRollback = await getApplicationTables();

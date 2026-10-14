@@ -31,6 +31,8 @@ const { validateRuntimeConfig } = require("./config/runtimeConfig");
 const { isCdekAutoShipmentEnabled } = require("./config/cdekAutomation");
 const { createCertificateRouter } = require("./routes/certificateRoutes");
 const { createCertificateAdminRouter } = require("./routes/certificateAdminRoutes");
+const { createCartRouter } = require("./routes/cartRoutes");
+const { createCartService } = require("./services/carts");
 const { getCertificateMailConfig, assertCertificateCheckoutConfigured, isCertificatePurchaseEnabled } = require("./config/certificateCheckout");
 const { processCertificateDeliveries } = require("./services/certificateDelivery");
 const {
@@ -88,6 +90,8 @@ app.use("/api/public-config", publicConfigRoutes);
 app.use("/api/certificates", createCertificateRouter());
 app.use("/api/admin/certificates", createCertificateAdminRouter());
 app.use("/api/orders", orderRoutes);
+const cartService = createCartService();
+app.use("/api/cart", createCartRouter(cartService));
 app.use("/api/inventory", inventoryRoutes);
 app.use("/api/clothing-types", clothingTypeRoutes);
 app.use("/api/pricing", pricingRoutes);
@@ -145,6 +149,18 @@ const start = async () => {
     await clearTemporaryUploads();
     await sequelize.authenticate();
     await assertDatabaseMigrationsCurrent(sequelize);
+
+    let cartCleanupRunning = false;
+    const cleanCarts = async () => {
+      if (cartCleanupRunning) return;
+      cartCleanupRunning = true;
+      try { await cartService.cleanUp(); }
+      finally { cartCleanupRunning = false; }
+    };
+    cleanCarts().catch(() => console.error("[cart] Initial cleanup failed"));
+    cron.schedule("17 * * * *", () => {
+      cleanCarts().catch(() => console.error("[cart] Scheduled cleanup failed"));
+    });
 
     // Also drain previously-paid purchases while new purchases are disabled.
     if (getCertificateMailConfig()) {
