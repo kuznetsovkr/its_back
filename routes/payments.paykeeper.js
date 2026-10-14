@@ -109,7 +109,7 @@ router.post("/link", requireOrderAccess, paymentLinkRateLimit, async (req, res) 
           .filter(Boolean)
           .join(" ") || "Покупатель",
         orderid: String(order.id),
-        client_email: "",
+        client_email: order.email || "",
         client_phone: order.phone || "",
         service_name: `Оплата заказа #${order.id}`,
       });

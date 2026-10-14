@@ -10,6 +10,7 @@ const calls = [];
 const order = { id: 42 };
 let covered = true;
 mockModule("../models/Order", { findByPk: async (id) => Number(id) === 42 ? order : null });
+mockModule("../models/OrderShipment", { findOne: async () => null });
 mockModule("../services/orderFinalizer", { finalizePaidOrder: async (input) => {
   calls.push(input);
   if (!covered) throw new GiftCertificateError("Этот заказ не покрыт сертификатом полностью", "certificate_order_not_covered", 409);
@@ -40,4 +41,32 @@ test("zero-due completion requires one order token, trusted origin and no client
   assert.deepEqual(calls, [{ orderId: 42, provider: "certificate", eventId: "certificate-42", paymentConfirmed: true, deferSideEffects: true }]);
   covered = false;
   assert.equal((await post()).status, 409);
+});
+
+test("the order status returns only an email-presence flag to its owner", async (t) => {
+  const previousSecret = process.env.ORDER_ACCESS_SECRET;
+  process.env.ORDER_ACCESS_SECRET = "fixture-order-secret-".repeat(3);
+  order.email = "buyer@example.com";
+  const app = express();
+  app.use("/orders", router);
+  const server = await new Promise((resolve) => { const listener = app.listen(0, "127.0.0.1", () => resolve(listener)); });
+  t.after(async () => {
+    delete order.email;
+    if (previousSecret === undefined) delete process.env.ORDER_ACCESS_SECRET; else process.env.ORDER_ACCESS_SECRET = previousSecret;
+    await new Promise((resolve) => server.close(resolve));
+  });
+  const url = `http://127.0.0.1:${server.address().port}/orders/42`;
+  const headers = { "X-Order-Access-Token": createOrderAccessToken(42) };
+  assert.equal((await fetch(url)).status, 401);
+  assert.equal((await fetch(url, { headers: { "X-Order-Access-Token": createOrderAccessToken(43) } })).status, 403);
+  let response = await fetch(url, { headers });
+  assert.equal(response.status, 200);
+  let body = await response.json();
+  assert.equal(body.hasBuyerEmail, true);
+  assert.equal("email" in body, false);
+  assert.equal(JSON.stringify(body).includes(order.email), false);
+  order.email = "";
+  response = await fetch(url, { headers });
+  body = await response.json();
+  assert.equal(body.hasBuyerEmail, false);
 });

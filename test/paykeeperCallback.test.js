@@ -147,6 +147,32 @@ test("PayKeeper link stores and charges the one-ruble test amount", async (t) =>
   assert.equal(order.totalPrice, ORDER_TOTAL);
   assert.equal(order.paymentAmount, 1);
   assert.equal(createdInvoices[0].pay_amount, "1.00");
+  assert.equal(createdInvoices[0].client_email, "");
+});
+
+test("PayKeeper takes the receipt email only from the saved order", async (t) => {
+  const originalOrder = { ...order };
+  Object.assign(order, { email: "buyer@example.com", paymentAmount: null, paymentProvider: null,
+    paymentStatus: "pending", paykeeperInvoiceId: null });
+  const app = express();
+  app.use(express.json());
+  app.use("/pk", paykeeperRouter);
+  const server = await new Promise((resolve) => {
+    const listener = app.listen(0, "127.0.0.1", () => resolve(listener));
+  });
+  t.after(async () => {
+    for (const key of Object.keys(order)) delete order[key];
+    Object.assign(order, originalOrder);
+    await new Promise((resolve) => server.close(resolve));
+  });
+  const link = (body) => fetch(`http://127.0.0.1:${server.address().port}/pk/link`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  const before = createdInvoices.length;
+  assert.equal((await link({ orderId: ORDER_ID, email: "forged@example.com" })).status, 400);
+  assert.equal(createdInvoices.length, before);
+  assert.equal((await link({ orderId: ORDER_ID })).status, 200);
+  assert.equal(createdInvoices.at(-1).client_email, "buyer@example.com");
 });
 
 test("PayKeeper callback verifies its signature and server-side order amount", async (t) => {

@@ -6,7 +6,9 @@ const calls = {
   ready: [],
   create: [],
   telegram: 0,
+  stockCommits: 0,
 };
+const processedEvents = new Set();
 
 const transaction = { LOCK: { UPDATE: "UPDATE" } };
 const order = {
@@ -35,7 +37,11 @@ mockModule("../models/Order", {
   findByPk: async (id) => Number(id) === order.id ? order : null,
 });
 mockModule("../models/PaymentEvent", {
-  findOrCreate: async () => [{}, true],
+  findOrCreate: async ({ where: { eventId } }) => {
+    const created = !processedEvents.has(eventId);
+    processedEvents.add(eventId);
+    return [{}, created];
+  },
 });
 mockModule("../models/OrderAttachment", {
   findAll: async () => [],
@@ -44,7 +50,10 @@ mockModule("../services/lowStockMonitor", {
   checkItemAndNotify: async () => {},
 });
 mockModule("../services/inventoryReservations", {
-  commitReservationForOrder: async () => ({ id: order.inventoryId }),
+  commitReservationForOrder: async () => {
+    calls.stockCommits += 1;
+    return { id: order.inventoryId };
+  },
 });
 mockModule("../services/cdekShipments", {
   createCdekShipmentForOrder: async (orderId) => {
@@ -71,6 +80,8 @@ beforeEach(() => {
   calls.ready.length = 0;
   calls.create.length = 0;
   calls.telegram = 0;
+  calls.stockCommits = 0;
+  processedEvents.clear();
   Object.assign(order, {
     paymentProvider: null,
     paymentStatus: "pending",
@@ -121,4 +132,26 @@ test("explicit automatic mode preserves the ready-and-create workflow", async ()
   assert.deepEqual(calls.ready, [order.id]);
   assert.deepEqual(calls.create, [order.id]);
   assert.equal(calls.telegram, 1);
+});
+
+test("an individual request stays unpaid and is confirmed and notified only once", async () => {
+  process.env.ENABLE_CDEK_AUTO_SHIPMENT = "1";
+  Object.assign(order, { paymentProvider: "manual", paymentStatus: "manual", status: "Ожидает расчёта" });
+  const input = { orderId: order.id, provider: "manual", eventId: `manual-${order.id}` };
+  const first = await finalizePaidOrder(input);
+  const retry = await finalizePaidOrder(input);
+
+  assert.equal(first.ok, true);
+  assert.equal(first.alreadyProcessed, false);
+  assert.equal(retry.ok, true);
+  assert.equal(retry.alreadyProcessed, true);
+  assert.equal(order.status, "Ожидает расчёта");
+  assert.equal(order.paymentStatus, "manual");
+  assert.equal(order.paymentProvider, "manual");
+  assert.equal(order.paidAt, null);
+  assert.equal(calls.stockCommits, 1);
+  assert.equal(calls.telegram, 1);
+  assert.deepEqual(calls.awaiting, []);
+  assert.deepEqual(calls.ready, []);
+  assert.deepEqual(calls.create, []);
 });

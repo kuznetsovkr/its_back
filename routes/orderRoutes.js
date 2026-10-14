@@ -611,6 +611,7 @@ router.get('/:id', requireOrderAccess, orderReadRateLimit, async (req, res) => {
   // Отдаём только то, что нужно фронту
   res.json({
     id: order.id,
+    hasBuyerEmail: Boolean(order.email),
     paymentStatus: order.paymentStatus || null, // 'pending' | 'paid' | 'failed'
     requiresReview: order.paymentStatus === "review",
     paymentProvider: order.paymentProvider || null,
