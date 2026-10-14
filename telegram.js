@@ -7,6 +7,7 @@ const {
   getTelegramRecipients,
 } = require("./services/telegramChannels");
 const { getTelegramAxiosRequestConfig } = require("./services/telegramProxy");
+const { getDeliveryModeLabel } = require("./lib/orderDelivery");
 
 const CHANNEL = TELEGRAM_CHANNELS.ORDERS;
 const telegramRequestConfig = getTelegramAxiosRequestConfig();
@@ -215,6 +216,7 @@ const buildOrderMessage = (order) => {
       ? `🧵 ${embroidery}${countsStr}${order.customText ? ` «${order.customText}»` : ""}${order.customTextFont ? ` • шрифт: ${order.customTextFont}` : ""}`
       : "",
     order.deliveryCity ? `🏙 ${order.deliveryCity}` : "",
+    getDeliveryModeLabel(order.deliveryMode) ? `🚚 Способ получения: ${getDeliveryModeLabel(order.deliveryMode)}` : "",
     `📍 ${order.deliveryAddress || "-"}`,
     order.deliveryComment ? `🚚 ${order.deliveryComment}` : "",
     `💰 ${priceLabel(order)}`,

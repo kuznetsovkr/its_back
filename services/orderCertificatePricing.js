@@ -21,7 +21,7 @@ const buildOrderPaymentSnapshot = ({ merchandisePrice, deliveryPrice, discountKo
 const publicOrderPayment = (order) => ({
   certificateDiscount: (order.certificateDiscountKopecks || 0) / 100,
   amountDue: order.amountDueKopecks == null ? order.totalPrice : order.amountDueKopecks / 100,
-  requiresBankPayment: order.amountDueKopecks !== 0,
+  requiresBankPayment: order.paymentStatus !== "manual" && order.paymentProvider !== "manual" && order.amountDueKopecks !== 0,
   paymentAmount: order.paymentAmount == null ? null : Number(order.paymentAmount),
   paymentTestMode: Boolean(order.paymentTestMode),
 });

@@ -134,6 +134,29 @@ test("legacy city input cannot override the server-provided location", () => {
   assert.equal(Object.hasOwn(validated, "deliveryCity"), false);
 });
 
+test("delivery methods preserve legacy drafts and reject inconsistent CDEK data", () => {
+  assert.equal(validateOrderCreateInput(validOrder(), [{}]).deliveryMethod, "manual");
+  const office = { cdekMode: "office", cdekAddress: JSON.stringify({ code: "KRS1" }) };
+  assert.equal(validateOrderCreateInput({ ...validOrder(), ...office }, [{}]).deliveryMethod, "cdek");
+  assert.throws(() => validateOrderCreateInput({ ...validOrder(), deliveryMethod: "cdek" }, [{}]), (error) => error.field === "cdekMode");
+  assert.throws(() => validateOrderCreateInput({ ...validOrder(), deliveryMethod: "courier" }, [{}]), (error) => error.field === "deliveryMethod");
+  for (const deliveryMethod of ["pickup", "russian_post", "manual"]) {
+    assert.throws(() => validateOrderCreateInput({ ...validOrder(), ...office, deliveryMethod }, [{}]), (error) => error.field === "deliveryMethod");
+  }
+});
+
+test("pickup address is server-owned and postal requests require a bounded office description", () => {
+  assert.equal(validateOrderCreateInput({ ...validOrder(), deliveryMethod: "pickup", deliveryAddress: "Подменённый адрес", deliveryCity: "Подменённый город" }, [{}]).deliveryAddress,
+    "Красноярск, ул. Ломоносова, 11");
+  assert.equal(validateOrderCreateInput({ ...validOrder(), deliveryMethod: "pickup", deliveryAddress: "" }, [{}]).deliveryMethod, "pickup");
+  assert.throws(() => validateOrderCreateInput({ ...validOrder(), deliveryMethod: "russian_post", deliveryAddress: " " }, [{}]),
+    (error) => error.field === "deliveryAddress" && error.message.includes("Почты России"));
+  assert.throws(() => validateOrderCreateInput({ ...validOrder(), deliveryMethod: "russian_post", deliveryAddress: "Я".repeat(301) }, [{}]), (error) => error.field === "deliveryAddress");
+  assert.equal(validateOrderCreateInput({ ...validOrder(), deliveryMethod: "russian_post", deliveryAddress: "Я".repeat(241) }, [{}]).deliveryAddress.length, 241);
+  assert.throws(() => validateOrderCreateInput({ ...validOrder(), deliveryMethod: "russian_post", deliveryAddress: "Я".repeat(242) }, [{}]), (error) => error.field === "deliveryAddress");
+  assert.throws(() => validateOrderCreateInput({ ...validOrder(), deliveryMethod: "russian_post", deliveryAddress: "Адрес\nс подменой" }, [{}]), (error) => error.field === "deliveryAddress");
+});
+
 test("public CDEK calculation replaces origin and uses a package profile from the catalog", () => {
   const payload = buildCdekCalculatePayload({
     action: "calculate",

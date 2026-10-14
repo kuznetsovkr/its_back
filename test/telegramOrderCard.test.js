@@ -109,3 +109,13 @@ test("long photo caption is safely shortened to the Telegram limit", () => {
   assert.equal(caption.length <= TELEGRAM_CAPTION_LIMIT, true);
   assert.match(caption, /Полные данные сохранены в заказе\.$/);
 });
+
+test("a manual delivery request identifies Russian Post or pickup without claiming payment", () => {
+  for (const [deliveryMode, label] of [["russian_post", "Почта России"], ["pickup", "Самовывоз"]]) {
+    const message = buildOrderMessage({ ...order, deliveryMode, paymentStatus: "manual", totalPrice: null, paidAt: null, deliveryAddress: "Адрес получения" });
+    assert.ok(message.includes(`Способ получения: ${label}`));
+    assert.ok(message.includes("Адрес получения"));
+    assert.equal(message.includes("✅ Оплачен"), false);
+    assert.equal(message.includes("СДЭК"), false);
+  }
+});

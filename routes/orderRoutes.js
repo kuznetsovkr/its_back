@@ -42,6 +42,7 @@ const { GiftCertificateError } = require("../lib/giftCertificateRules");
 const { reserveCertificateForOrder, releaseCertificateForOrder } = require("../services/giftCertificates");
 const { buildOrderPaymentSnapshot, publicOrderPayment } = require("../services/orderCertificatePricing");
 const { isPaykeeperTestMode } = require("../services/paymentMode");
+const { getOrderDelivery } = require("../lib/orderDelivery");
 const {
   TurnstileVerificationError,
   verifyTurnstileToken,
@@ -95,6 +96,7 @@ router.post(
       preferredContact,
       deliveryComment,
       deliveryAddress,
+      deliveryMethod,
       cdekMode,
       cdekAddress,
       turnstileToken,
@@ -120,7 +122,8 @@ router.post(
       petFaceCount,
       pricingConfig,
     });
-    const isManualFlow = merchandiseQuote.manual || !cdekMode;
+    // Non-CDEK tariffs/payment rules remain unapproved: preserve the existing request-only flow.
+    const isManualFlow = merchandiseQuote.manual || deliveryMethod !== "cdek";
     if (certificateCode && isManualFlow) {
       throw new GiftCertificateError("Сертификат можно применить после расчёта стоимости. Для ручной заявки обратитесь к менеджеру", "certificate_manual_price_pending", 400);
     }
@@ -139,14 +142,7 @@ router.post(
     });
     const paymentAmount = isManualFlow ? null : paymentSnapshot.paymentAmount;
     const paymentTestMode = !isManualFlow && isPaykeeperTestMode();
-    const canonicalDeliveryAddress = cdekQuote
-      ? [
-          "СДЭК",
-          cdekQuote.office.code,
-          cdekQuote.office.location?.address,
-          "до ПВЗ",
-        ].filter(Boolean).join(", ")
-      : deliveryAddress;
+    const delivery = getOrderDelivery({ deliveryMethod, deliveryAddress, cdekQuote });
 
     // Создание заказа и резервирование единицы выполняются атомарно.
     const { order, reservation } = await createOrderWithReservation({
@@ -171,8 +167,8 @@ router.post(
         email: email || null,
         preferredContact: preferredContact || null,
         deliveryComment: deliveryComment || null,
-        deliveryCity: cdekQuote?.office?.location?.city || null,
-        deliveryMode: cdekQuote ? "cdek_pvz" : "manual",
+        deliveryCity: delivery.city,
+        deliveryMode: delivery.mode,
         privacyConsentAt: new Date(),
         orderDate: new Date(),
         status: isManualFlow ? "Ожидает расчёта" : "Ожидание оплаты",
@@ -181,7 +177,7 @@ router.post(
         totalPrice,
         paymentAmount,
         ...paymentSnapshot,
-        deliveryAddress: canonicalDeliveryAddress,
+        deliveryAddress: delivery.address,
       },
       shipmentValues: cdekQuote
         ? {
@@ -264,6 +260,7 @@ router.post(
       orderId: order.id,
       orderToken: createOrderAccessToken(order.id),
       cdekNumber: null,
+      deliveryMode: delivery.mode,
       pricePending: isManualFlow,
       merchandisePrice: merchandiseQuote.merchandisePrice,
       deliveryPrice: cdekQuote?.deliveryPrice ?? null,
@@ -612,6 +609,7 @@ router.get('/:id', requireOrderAccess, orderReadRateLimit, async (req, res) => {
   res.json({
     id: order.id,
     hasBuyerEmail: Boolean(order.email),
+    deliveryMode: order.deliveryMode || null,
     paymentStatus: order.paymentStatus || null, // 'pending' | 'paid' | 'failed'
     requiresReview: order.paymentStatus === "review",
     paymentProvider: order.paymentProvider || null,
