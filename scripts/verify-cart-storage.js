@@ -84,12 +84,16 @@ const run = async () => {
   assert.equal(JSON.stringify(restored).includes("requestHash"), false);
   assert.equal(JSON.stringify(restored).includes(temporaryRoot), false);
   const first = restored.items[0];
+  assert.equal(first.requestKey, key);
+  assert.equal(restored.merchandisePrice, restored.items.reduce((sum, item) => sum + item.linePrice, 0));
+  assert.ok(first.unitPrice > 0);
   const image = await service.getAttachment(access, first.id, first.attachments[0].id);
   assert.deepEqual(await fs.promises.readFile(image.filePath), fixturePng);
   await assert.rejects(service.getAttachment(access, restored.items[1].id, first.attachments[0].id), { statusCode: 404 });
   const other = await service.createSession({ turnstileToken: challenge() });
   await assert.rejects(service.getAttachment(accessOf(other), first.id, first.attachments[0].id), { statusCode: 404 });
-  await service.setQuantity(access, first.id, 3);
+  const increased = await service.setQuantity(access, first.id, 3);
+  assert.equal(increased.items[0].linePrice, first.unitPrice * 3);
   await assert.rejects(service.setQuantity(access, first.id, 20), { code: "cart_stock_unavailable" });
   await assert.rejects(service.setQuantity(access, first.id, 21), { statusCode: 400 });
   assert.equal((await inventory.reload()).quantity, 12);

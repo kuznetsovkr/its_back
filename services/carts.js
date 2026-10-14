@@ -2,6 +2,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const { Op } = require("sequelize");
+const { quoteCartItems } = require("./cartPricing");
 const { CartError, CART_RETENTION_MS, MAX_ITEM_QUANTITY, assertCartCapacity, readUuid } = require("../lib/cartRules");
 const { UPLOAD_ROOT, isPathInside, persistValidatedImage, resolveSafeFilePath, sanitizeOriginalName } = require("../lib/uploadSecurity");
 
@@ -61,8 +62,10 @@ const createCartService = (overrides = {}) => {
   const snapshot = async (cart, transaction) => {
     const items = (await allItems(cart.id, transaction)).filter((item) => !item.deletedAt);
     const attachments = await allAttachments(items, transaction);
-    return { id: cart.id, expiresAt: new Date(cart.expiresAt).toISOString(), items: items.map((item) => ({
-      id: item.id, inventoryId: item.inventoryId, productType: item.productType, color: item.color, size: item.size,
+    const quoted = await quoteCartItems(items, deps);
+    return { id: cart.id, expiresAt: new Date(cart.expiresAt).toISOString(), merchandisePrice: quoted.merchandisePrice, items: quoted.items.map((item) => ({
+      id: item.id, requestKey: item.requestKey, inventoryId: item.inventoryId, productType: item.productType, color: item.color, size: item.size,
+      unitPrice: item.unitPrice, linePrice: item.linePrice, pricingError: item.pricingError, stockWarning: item.stockWarning || "",
       imageUrl: item.imageUrl, embroideryType: item.embroideryType, embroideryTypeRu: item.embroideryTypeRu,
       patronusCount: item.patronusCount, petFaceCount: item.petFaceCount, comment: item.comment, quantity: item.quantity,
       attachments: attachments.filter((file) => file.cartItemId === item.id).map((file) => ({
