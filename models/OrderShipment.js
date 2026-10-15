@@ -31,6 +31,7 @@ const OrderShipment = sequelize.define("order_shipment", {
   recipientName: { type: DataTypes.STRING(200), allowNull: false },
   recipientPhone: { type: DataTypes.STRING(32), allowNull: false },
   declaredValue: { type: DataTypes.INTEGER, allowNull: false, validate: { min: 0 } },
+  packages: { type: DataTypes.JSONB, allowNull: true },
   providerUuid: { type: DataTypes.STRING(64), allowNull: true },
   cdekNumber: { type: DataTypes.STRING(64), allowNull: true },
   attempts: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0, validate: { min: 0 } },

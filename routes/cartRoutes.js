@@ -5,6 +5,8 @@ const { assertAllowedKeys, ensurePlainObject, readString } = require("../lib/req
 const { readUuid, validateCartItem, validateCartQuantity } = require("../lib/cartRules");
 const { orderImagesUpload, validateUploadedImages, cleanupTemporaryFilesAfterResponse, inspectStoredImage, streamImage, uploadErrorHandler } = require("../lib/uploadSecurity");
 const { createCartService } = require("../services/carts");
+const { validateCartQuote, validateCartCheckout } = require("../lib/cartCheckoutRules");
+const { requireOrderAccessConfigured } = require("../middleware/orderAccess");
 
 const limiter = (prefix, max) => createRateLimiter({ windowMs: 15 * 60_000, max, keyPrefix: prefix,
   keyGenerator: (req) => req.ip || req.socket?.remoteAddress || "unknown",
@@ -13,8 +15,10 @@ const createLimit = limiter("cart-session", 6);
 const readLimit = limiter("cart-read", 240);
 const uploadLimit = limiter("cart-upload", 20);
 const mutationLimit = limiter("cart-change", 60);
+const quoteLimit = limiter("cart-quote", 30);
+const checkoutLimit = limiter("cart-checkout", 6);
 
-const createCartRouter = (deps = createCartService()) => {
+const createCartRouter = (deps = createCartService(), checkoutOverride = null) => {
   const router = express.Router();
   router.use((_req, res, next) => { res.set("Cache-Control", "no-store"); next(); });
   const handleError = (error, res) => {
@@ -32,6 +36,21 @@ const createCartRouter = (deps = createCartService()) => {
   };
   const json = (req, res, next) => req.is("application/json") ? next()
     : res.status(415).json({ message: "Content-Type должен быть application/json" });
+  const checkoutService = () => checkoutOverride || require("../services/cartCheckout").createCartCheckoutService({ carts: deps });
+  router.post("/:cartId/quote", requireTrustedOrigin, quoteLimit, access, json, async (req, res) => {
+    try { return res.json(await checkoutService().quote(req.cartAccess, validateCartQuote(req.body))); }
+    catch (error) { return handleError(error, res); }
+  });
+  router.post("/:cartId/checkout", requireTrustedOrigin, requireOrderAccessConfigured, checkoutLimit, access, json, async (req, res) => {
+    try { return res.json(await checkoutService().create(req.cartAccess, validateCartCheckout(req.body), req.header("Idempotency-Key"), req.ip)); }
+    catch (error) { return handleError(error, res); }
+  });
+  router.post("/:cartId/checkout/cancel", requireTrustedOrigin, mutationLimit, access, json, async (req, res) => {
+    try {
+      ensurePlainObject(req.body, "body"); assertAllowedKeys(req.body, new Set(), "отмене оформления");
+      return res.json(await checkoutService().cancel(req.cartAccess));
+    } catch (error) { return handleError(error, res); }
+  });
   router.post("/session", requireTrustedOrigin, createLimit, json, async (req, res) => {
     try {
       ensurePlainObject(req.body, "body");

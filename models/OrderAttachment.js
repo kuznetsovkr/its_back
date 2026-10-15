@@ -4,6 +4,7 @@ const sequelize = require('../db');
 const OrderAttachment = sequelize.define('OrderAttachment', {
   id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
   orderId: { type: DataTypes.INTEGER, allowNull: false },
+  orderItemId: { type: DataTypes.INTEGER, allowNull: true, references: { model: "order_items", key: "id" }, onDelete: "SET NULL" },
   path: { type: DataTypes.STRING, allowNull: false },   // абсолютный путь на диске
   mime: { type: DataTypes.STRING },
   originalName: { type: DataTypes.STRING },

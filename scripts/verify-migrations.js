@@ -67,6 +67,7 @@ const expectedTables = [
   "carts",
   "cart_items",
   "cart_attachments",
+  "cart_checkouts",
   "clothingTypes",
   "colors",
   "gift_certificates",
@@ -77,6 +78,7 @@ const expectedTables = [
   "inventory_reservations",
   "low_stock_alerts",
   "order_attachments",
+  "order_items",
   "order_shipments",
   "orders",
   "payment_events",
@@ -184,6 +186,14 @@ const run = async () => {
   if (cartCheck.stderr) process.stderr.write(cartCheck.stderr);
   if (cartCheck.error) throw cartCheck.error;
   if (cartCheck.status !== 0) throw new Error("Cart integration checks failed");
+
+  const checkoutCheck = spawnSync(process.execPath, ["scripts/verify-cart-checkout.js"], {
+    cwd: process.cwd(), env: { ...process.env, NODE_ENV: "test", DB_NAME: testDatabaseName }, encoding: "utf8", timeout: 120_000,
+  });
+  if (checkoutCheck.stdout) process.stdout.write(checkoutCheck.stdout);
+  if (checkoutCheck.stderr) process.stderr.write(checkoutCheck.stderr);
+  if (checkoutCheck.error) throw checkoutCheck.error;
+  if (checkoutCheck.status !== 0) throw new Error("Cart checkout integration checks failed");
 
   runCli(["db:migrate:undo:all"]);
   const tablesAfterRollback = await getApplicationTables();

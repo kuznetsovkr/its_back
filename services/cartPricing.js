@@ -1,4 +1,4 @@
-const { PricingError } = require("./orderPricing");
+const { PricingError, getGoodsPreset } = require("./orderPricing");
 
 // Read-only estimate. It neither reserves stock nor includes delivery/payment.
 const quoteCartItems = async (items, { findInventory, calculatePrice, getPricingExtras }) => {
@@ -16,7 +16,10 @@ const quoteCartItems = async (items, { findInventory, calculatePrice, getPricing
         throw new PricingError("Для изделия требуется расчёт менеджера");
       }
       const required = items.filter((entry) => entry.inventoryId === inventory.id).reduce((sum, entry) => sum + entry.quantity, 0);
+      let parcel = null;
+      try { parcel = getGoodsPreset(inventory); } catch (error) { if (!(error instanceof PricingError)) throw error; }
       return { ...item, unitPrice: price.merchandisePrice, linePrice: price.merchandisePrice * item.quantity,
+        parcel,
         pricingError: "", stockWarning: required > inventory.quantity ? "Выбранного количества сейчас нет на складе" : "" };
     } catch (error) {
       if (!(error instanceof PricingError)) throw error;

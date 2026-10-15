@@ -45,6 +45,16 @@ test("CDEK retries use bounded exponential backoff", () => {
   assert.equal(getCdekRetryDelayMs(100), 6 * 60 * 60 * 1000);
 });
 
+test("cart CDEK shipment uses immutable packages for every unit and the separate recipient's phone", () => {
+  const packages = [1, 2, 3].map((index) => ({ number: `parcel-${index}`, weight: 800, width: 35, height: 35, length: 7,
+    items: [{ name: "Худи", amount: 1, payment: { value: 0 }, cost: 9000, weight: 800 }] }));
+  const result = buildCdekOrderPayload({ order: { id: 90, isCartOrder: true }, inventory: null,
+    shipment: { packages, tariffCode: 136, deliveryPoint: "KRS1", recipientName: "Другой получатель", recipientPhone: "+79998887766" } });
+  assert.deepEqual(result.packages, packages);
+  assert.equal(result.recipient.phones[0].number, "+79998887766");
+  assert.equal(result.packages.length, 3);
+});
+
 test("public CDEK endpoint no longer accepts shipment creation", async (t) => {
   const express = require("express");
   const cdekServiceRoutes = require("../routes/cdekServiceRoutes");

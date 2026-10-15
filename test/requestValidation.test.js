@@ -209,6 +209,16 @@ test("public CDEK office query accepts only bounded allowlisted filters", () => 
   );
 });
 
+test("cart widget accepts at most 50 known package presets and rejects a forged package anywhere in the array", () => {
+  const parcel = { width: 30, height: 20, length: 3, weight: .3 };
+  const body = { to_location: { code: 44 }, packages: Array.from({ length: 50 }, () => ({ ...parcel })) };
+  const profiles = [{ ...parcel, weight: 300 }];
+  assert.equal(buildCdekCalculatePayload(body, profiles).packages.length, 50);
+  assert.throws(() => buildCdekCalculatePayload({ ...body, packages: [...body.packages, parcel] }, profiles), (error) => error.field === "packages");
+  body.packages[49].weight = 0;
+  assert.throws(() => buildCdekCalculatePayload(body, profiles), (error) => error.field === "packages[49]");
+});
+
 test("public CDEK polygon query validates viewport bounds and filters", () => {
   const params = buildCdekOfficesByCoordinateParams({
     action: "byCoordinate",

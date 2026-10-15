@@ -226,7 +226,7 @@ const resolveOffice = async (addressRaw) => {
   return { office, cityCode };
 };
 
-const calculateCdekDelivery = async ({ inventory, cdekMode, cdekAddress }) => {
+const calculateCdekDelivery = async ({ inventory, packages, cdekMode, cdekAddress }) => {
   if (String(cdekMode || "").toLowerCase() !== "office") {
     throw new PricingError("Для онлайн-оплаты выберите пункт выдачи СДЭК", 400, "cdek_office_required");
   }
@@ -240,7 +240,7 @@ const calculateCdekDelivery = async ({ inventory, cdekMode, cdekAddress }) => {
     lang: "rus",
     from_location: getCdekFromLocation(),
     to_location: { code: cityCode },
-    packages: [getGoodsPreset(inventory)],
+    packages: packages || [getGoodsPreset(inventory)],
   };
 
   const response = await axios.post(`${baseUrl}/calculator/tarifflist`, payload, {
@@ -266,7 +266,7 @@ const calculateCdekDelivery = async ({ inventory, cdekMode, cdekAddress }) => {
     tariff,
     office,
     from: getCdekFromLocation(),
-    packages: [getGoodsPreset(inventory)],
+    packages: payload.packages,
   };
 };
 

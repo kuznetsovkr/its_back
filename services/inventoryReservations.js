@@ -78,6 +78,7 @@ const lockInventoryForOrder = async (order, transaction) => {
 };
 
 const commitReservationForOrder = async ({ order, transaction }) => {
+  if (order.isCartOrder) return require("./groupInventoryReservations").commitGroupReservation(order, transaction);
   let reservation = await InventoryReservation.findOne({
     where: { orderId: order.id },
     transaction,
@@ -140,9 +141,15 @@ const releaseLockedReservation = async ({ reservation, transaction, reason }) =>
 const releaseReservationForOrder = async (
   orderId,
   reason = "cancelled",
-  existingTransaction = null
+  existingTransaction = null,
+  isCartOrder = false
 ) => {
   const release = async (transaction) => {
+    if (isCartOrder) {
+      const result = await require("./groupInventoryReservations").releaseGroupReservation(orderId, transaction, reason);
+      await OrderShipment.update({ status: "cancelled", lastError: `Reservation ${reason}` }, { where: { orderId, status: "pending_payment" }, transaction });
+      return result;
+    }
     const reservation = await InventoryReservation.findOne({
       where: { orderId },
       transaction,
@@ -162,8 +169,9 @@ const releaseReservationForOrder = async (
   return sequelize.transaction(release);
 };
 
-const assertActiveReservation = async (orderId, existingTransaction = null) => {
+const assertActiveReservation = async (orderId, existingTransaction = null, isCartOrder = false) => {
   const assertReservation = async (transaction) => {
+    if (isCartOrder) return require("./groupInventoryReservations").assertGroupReservation(orderId, transaction);
     const reservation = await InventoryReservation.findOne({
       where: { orderId },
       transaction,
@@ -204,6 +212,17 @@ const releaseExpiredReservations = async ({ limit = 100 } = {}) => {
         transaction,
         lock: transaction.LOCK.UPDATE,
       });
+      if (order?.isCartOrder) {
+        const active = await InventoryReservation.findOne({ where: { id: candidate.id, status: RESERVATION_STATUS.ACTIVE }, transaction });
+        if (!active || order.paymentStatus === "paid") return null;
+        const released = await releaseReservationForOrder(order.id, "expired", transaction, true);
+        if (["pending", "manual"].includes(order.paymentStatus)) {
+          await order.update({ paymentStatus: "expired", status: "Резерв истёк" }, { transaction });
+        }
+        if (order.certificateId) await require("./giftCertificates").releaseCertificateForOrder({ orderId: order.id, reason: "expired", transaction });
+        await require("./cartOrderLifecycle").unlockCartOrder(order.id, transaction);
+        return released.inventoryIds;
+      }
       const reservation = await InventoryReservation.findByPk(candidate.id, {
         transaction,
         lock: transaction.LOCK.UPDATE,
@@ -236,7 +255,7 @@ const releaseExpiredReservations = async ({ limit = 100 } = {}) => {
       }
       return inventory?.id || null;
     });
-    if (releasedInventoryId) releasedInventoryIds.push(releasedInventoryId);
+    if (releasedInventoryId) releasedInventoryIds.push(...(Array.isArray(releasedInventoryId) ? releasedInventoryId : [releasedInventoryId]));
   }
 
   return releasedInventoryIds;

@@ -8,7 +8,7 @@ const recordCertificatePaymentReview = ({ orderId, paymentId }) => sequelize.tra
   if (order.paymentStatus === "review") return false;
   const notify = order.paymentStatus !== "review";
   await order.update({ paymentStatus: "review", paymentProvider: "paykeeper", paykeeperPaymentId: paymentId,
-    paidAt: order.paidAt || new Date(), status: "Оплата получена — требуется проверка сертификата" }, { transaction });
+    paidAt: order.paidAt || new Date(), status: order.isCartOrder ? "Оплата получена — требуется проверка корзины" : "Оплата получена — требуется проверка сертификата" }, { transaction });
   console.error("[certificate-order] Paid order requires review", { orderId });
   return notify;
 });

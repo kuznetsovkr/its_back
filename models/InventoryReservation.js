@@ -33,7 +33,7 @@ const InventoryReservation = sequelize.define("inventory_reservation", {
   releaseReason: { type: DataTypes.STRING(64), allowNull: true },
 }, {
   indexes: [
-    { unique: true, fields: ["orderId"] },
+    { unique: true, fields: ["orderId", "inventoryId"] },
     { fields: ["status", "expiresAt"] },
     { fields: ["inventoryId"] },
   ],

@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { Op } = require("sequelize");
 const { quoteCartItems } = require("./cartPricing");
+const { assertCartMutable } = require("../lib/cartCheckoutRules");
 const { CartError, CART_RETENTION_MS, MAX_ITEM_QUANTITY, assertCartCapacity, readUuid } = require("../lib/cartRules");
 const { UPLOAD_ROOT, isPathInside, persistValidatedImage, resolveSafeFilePath, sanitizeOriginalName } = require("../lib/uploadSecurity");
 
@@ -62,10 +63,16 @@ const createCartService = (overrides = {}) => {
   const snapshot = async (cart, transaction) => {
     const items = (await allItems(cart.id, transaction)).filter((item) => !item.deletedAt);
     const attachments = await allAttachments(items, transaction);
-    const quoted = await quoteCartItems(items, deps);
-    return { id: cart.id, expiresAt: new Date(cart.expiresAt).toISOString(), merchandisePrice: quoted.merchandisePrice, items: quoted.items.map((item) => ({
+    const checkout = cart.checkoutOrderId ? await require("./cartOrderData").getCartOrderData(cart.checkoutOrderId, transaction) : null;
+    const quoted = checkout ? { merchandisePrice: checkout.merchandisePrice, items: items.map((item) => {
+      const saved = checkout.items.find((line) => line.sourceCartItemId === item.id);
+      return { ...item, unitPrice: saved?.unitPrice ?? null, linePrice: saved?.linePrice ?? null,
+        parcel: saved?.parcel || null, pricingError: saved ? "" : "Позиция требует проверки менеджером", stockWarning: "" };
+    }) } : await quoteCartItems(items, deps);
+    return { id: cart.id, revision: cart.revision, checkout, expiresAt: new Date(cart.expiresAt).toISOString(), merchandisePrice: quoted.merchandisePrice, items: quoted.items.map((item) => ({
       id: item.id, requestKey: item.requestKey, inventoryId: item.inventoryId, productType: item.productType, color: item.color, size: item.size,
       unitPrice: item.unitPrice, linePrice: item.linePrice, pricingError: item.pricingError, stockWarning: item.stockWarning || "",
+      parcel: item.parcel || null,
       imageUrl: item.imageUrl, embroideryType: item.embroideryType, embroideryTypeRu: item.embroideryTypeRu,
       patronusCount: item.patronusCount, petFaceCount: item.petFaceCount, comment: item.comment, quantity: item.quantity,
       attachments: attachments.filter((file) => file.cartItemId === item.id).map((file) => ({
@@ -149,6 +156,7 @@ const createCartService = (overrides = {}) => {
   });
 
   return {
+    lockCart: loadCart,
     async createSession({ turnstileToken = "", remoteIp } = {}) {
       await deps.verifyTurnstile({ token: turnstileToken, remoteIp });
       const token = crypto.randomBytes(32).toString("hex");
@@ -175,6 +183,7 @@ const createCartService = (overrides = {}) => {
             await deps.verifyTurnstile({ token: input.turnstileToken, remoteIp });
           }
           const current = await capacity(cart.id, transaction);
+          assertCartMutable(cart);
           if (current.items.length >= 100) throw new CartError("Создайте новую корзину: достигнут лимит изменений", "cart_history_limit");
           assertCartCapacity({ ...current, addedItems: 1, addedQuantity: 1, addedBytes: files.reduce((total, file) => total + file.size, 0) });
           const inventory = await deps.findInventory(input.productType, input.color, input.size);
@@ -190,7 +199,7 @@ const createCartService = (overrides = {}) => {
             await CartAttachment.create({ id: crypto.randomUUID(), cartItemId: item.id, fileName: stored.fileName,
               originalName: sanitizeOriginalName(file.originalname, stored.fileName), mime: stored.mime, size: file.size, position }, { transaction });
           }
-          await cart.update({ expiresAt: expiry(), firstUploadProofExpiresAt: null }, { transaction });
+          await cart.update({ expiresAt: expiry(), firstUploadProofExpiresAt: null, revision: cart.revision + 1 }, { transaction });
           return { ...await snapshot(cart, transaction), addedItemId: item.id, alreadyAdded: false };
         });
       } catch (error) {
@@ -209,13 +218,14 @@ const createCartService = (overrides = {}) => {
         const cart = await loadCart(access, transaction);
         const item = await findItem(cart.id, itemId, transaction);
         if (item.quantity === quantity) return snapshot(cart, transaction);
+        assertCartMutable(cart);
         const current = await capacity(cart.id, transaction);
         const difference = quantity - item.quantity;
         assertCartCapacity({ ...current, addedQuantity: difference });
         // Reducing a quantity remains possible even if stock changed since adding.
         if (difference > 0) assertStock(current.items, await deps.Inventory.findByPk(item.inventoryId), difference);
         await item.update({ quantity }, { transaction });
-        await cart.update({ expiresAt: expiry() }, { transaction });
+        await cart.update({ expiresAt: expiry(), revision: cart.revision + 1 }, { transaction });
         return snapshot(cart, transaction);
       });
     },
@@ -224,8 +234,9 @@ const createCartService = (overrides = {}) => {
         const cart = await loadCart(access, transaction);
         const item = await findItem(cart.id, itemId, transaction, true);
         if (item.deletedAt) return snapshot(cart, transaction);
+        assertCartMutable(cart);
         await item.update({ deletedAt: deps.now() }, { transaction });
-        await cart.update({ expiresAt: expiry() }, { transaction });
+        await cart.update({ expiresAt: expiry(), revision: cart.revision + 1 }, { transaction });
         return snapshot(cart, transaction);
       });
       try { await cleanDeletedItem(access.cartId, itemId); }
@@ -235,6 +246,7 @@ const createCartService = (overrides = {}) => {
     async clearCart(access) {
       await sequelize.transaction(async (transaction) => {
         const cart = await loadCart(access, transaction);
+        assertCartMutable(cart);
         await cart.update({ expiresAt: deps.now() }, { transaction });
       });
       try { await cleanExpiredCart(access.cartId); }

@@ -37,6 +37,9 @@ const finalizePaidOrder = async ({
       lock: transaction.LOCK.UPDATE,
     });
     if (!order) return { ok: false, message: "Заказ не найден" };
+    if (order.isCartOrder && paymentConfirmed && ["expired", "cancelled", "review"].includes(order.paymentStatus)) {
+      throw new GiftCertificateError("Оплата старого или отменённого оформления корзины требует проверки менеджером", "paid_cart_order_requires_review");
+    }
 
     if (order.certificateId && order.paymentStatus === "review") {
       throw new GiftCertificateError("Оплата получена. Заказ требует ручной проверки сертификата", "paid_order_requires_review");
@@ -75,7 +78,7 @@ const finalizePaidOrder = async ({
       transaction,
     });
     const alreadyProcessed =
-      !created || (!isManualFlow && order.status === "Оплачено");
+      !created || (!isManualFlow && order.paymentStatus === "paid" && order.status === "Оплачено");
 
     if (alreadyProcessed) {
       if (order.paymentStatus === "paid") {
@@ -88,7 +91,7 @@ const finalizePaidOrder = async ({
       if (provider === "certificate" && order.paymentStatus !== "paid") {
         const { assertActiveReservation } = require("./inventoryReservations");
         const { assertCertificateReservationForOrder } = require("./giftCertificates");
-        await assertActiveReservation(order.id, transaction);
+        await assertActiveReservation(order.id, transaction, order.isCartOrder);
         await assertCertificateReservationForOrder({ order, transaction });
       }
       order.paymentStatus = "paid";
@@ -118,6 +121,7 @@ const finalizePaidOrder = async ({
     if (hasNumericOverridePrice) order.totalPrice = overridePrice;
     if (overrides.deliveryAddress) order.deliveryAddress = overrides.deliveryAddress;
     await order.save({ transaction });
+    if (order.isCartOrder && order.paymentStatus === "paid") await require("./cartOrderLifecycle").unlockCartOrder(order.id, transaction, true);
 
     return { ok: true, alreadyProcessed: false, order, inventory };
   });
@@ -127,14 +131,16 @@ const finalizePaidOrder = async ({
   const runSideEffects = async () => {
     if (!result.alreadyProcessed) {
       try {
-        await checkItemAndNotify(result.inventory.id);
+        for (const inventoryId of result.inventory.inventoryIds || [result.inventory.id]) await checkItemAndNotify(inventoryId);
       } catch (error) {
         console.error("Low-stock notify error:", error);
       }
 
       try {
         const files = await OrderAttachment.findAll({ where: { orderId: parsedOrderId }, raw: true });
-        await sendOrderToTelegram(result.order.toJSON(), files);
+        const details = result.order.toJSON();
+        if (result.order.isCartOrder) details.items = await require("../models/OrderItem").findAll({ where: { orderId: parsedOrderId }, order: [["position", "ASC"]], raw: true });
+        await sendOrderToTelegram(details, files);
       } catch (error) {
         console.error("Telegram send error:", error);
       }

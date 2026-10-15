@@ -110,6 +110,28 @@ test("long photo caption is safely shortened to the Telegram limit", () => {
   assert.match(caption, /Полные данные сохранены в заказе\.$/);
 });
 
+test("cart notification names all garments and labels photographs by their order item", async () => {
+  const items = [{ id: 1, productType: "Худи", color: "Чёрный", size: "M", quantity: 2, embroideryTypeRu: "Автомобиль", linePrice: 18000 },
+    { id: 2, productType: "Футболка", color: "Белый", size: "L", quantity: 1, embroideryTypeRu: "Мордочка питомца", linePrice: 6000 }];
+  const message = buildOrderMessage({ ...order, isCartOrder: true, items });
+  assert.match(message, /Худи • Чёрный • M — 2 шт/);
+  assert.match(message, /Футболка • Белый • L — 1 шт/);
+  await sendOrderToTelegram({ ...order, isCartOrder: true, items }, [
+    { path: __filename, originalName: "car.jpg", orderItemId: 1 }, { path: __filename, originalName: "pet.jpg", orderItemId: 2 },
+  ]);
+  const body = requests[0].data.getBuffer().toString("utf8");
+  assert.match(body, /позиция 1: Худи/); assert.match(body, /позиция 2: Футболка/);
+});
+
+test("cart albums never exceed Telegram's ten-photo limit or discard later photos", async () => {
+  await sendOrderToTelegram({ ...order, isCartOrder: true }, Array.from({ length: 12 }, (_, index) => ({ path: __filename, originalName: `pet-${index}.jpg` })));
+  assert.equal(requests.length, 3);
+  assert.match(requests[0].url, /sendMessage$/);
+  assert.match(requests[1].url, /sendMediaGroup$/); assert.match(requests[2].url, /sendMediaGroup$/);
+  assert.match(requests[1].data.getBuffer().toString("utf8"), /1–10 из 12/);
+  assert.match(requests[2].data.getBuffer().toString("utf8"), /11–12 из 12/);
+});
+
 test("a manual delivery request identifies Russian Post or pickup without claiming payment", () => {
   for (const [deliveryMode, label] of [["russian_post", "Почта России"], ["pickup", "Самовывоз"]]) {
     const message = buildOrderMessage({ ...order, deliveryMode, paymentStatus: "manual", totalPrice: null, paidAt: null, deliveryAddress: "Адрес получения" });

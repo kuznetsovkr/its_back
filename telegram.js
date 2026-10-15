@@ -75,14 +75,15 @@ async function sendPhotoCard(chatId, fileOrId, caption, filename) {
   }
 }
 
-async function sendMediaGroupCard(chatId, mediaItems, caption) {
+async function sendMediaGroupCard(chatId, mediaItems, caption, labels = []) {
   const { enabled, token } = getTelegramChannelConfig(CHANNEL);
   if (!enabled || !token || !chatId) return { sent: false, fileIds: [] };
 
   const withCaption = (media, index) => ({
     type: "photo",
     media,
-    ...(index === 0 ? { caption } : {}),
+    ...(index === 0 || labels[index] ? { caption: fitTelegramMessage(index === 0
+      ? [labels[index], caption].filter(Boolean).join("\n\n") : labels[index], TELEGRAM_CAPTION_LIMIT) } : {}),
   });
 
   try {
@@ -199,20 +200,27 @@ const buildOrderMessage = (order) => {
   const countsStr = counts.length ? ` (${counts.join(", ")})` : "";
   const customerName = fullName(order);
   const recipientName = String(order.recipientFullName || "").trim();
-  const separateRecipient = recipientName && recipientName !== customerName;
+  const separateRecipient = recipientName && (recipientName !== customerName ||
+    (order.recipientPhone && formatPhone(order.recipientPhone) !== formatPhone(order.phone)));
   const contactDetails = [
     order.email ? `E-mail: ${order.email}` : "",
     order.preferredContact ? `Связь: ${order.preferredContact}` : "",
   ].filter(Boolean);
+  const cartLines = Array.isArray(order.items) ? order.items.map((item, index) => {
+    const objects = item.embroideryType === "Patronus" ? item.patronusCount : item.embroideryType === "petFace" ? item.petFaceCount : 1;
+    return `${index + 1}. ${item.productType} • ${item.color} • ${item.size} — ${item.quantity} шт.\n` +
+      `   ${item.embroideryTypeRu || item.embroideryType}${objects > 1 ? ` × ${objects}` : ""} • ${item.linePrice} ₽${item.comment ? `\n   Пожелания: ${String(item.comment).slice(0, 100)}${item.comment.length > 100 ? "… (полностью в заказе)" : ""}` : ""}`;
+  }).join("\n") : "";
 
   return [
     `🧾 Заказ #${order.id} — новый`,
     `👤 ${customerName || "Имя не указано"}`,
     `📞 ${formatPhone(order.phone)}`,
     separateRecipient ? `📦 Получатель: ${recipientName}` : "",
+    separateRecipient && order.recipientPhone ? `📞 Телефон получателя: ${formatPhone(order.recipientPhone)}` : "",
     contactDetails.length ? contactDetails.join(" • ") : "",
-    `🧥 ${order.productType || "-"} • ${order.color || "-"} • ${order.size || "-"}`,
-    embroidery
+    cartLines ? `🧥 Состав корзины:\n${cartLines}` : `🧥 ${order.productType || "-"} • ${order.color || "-"} • ${order.size || "-"}`,
+    !cartLines && embroidery
       ? `🧵 ${embroidery}${countsStr}${order.customText ? ` «${order.customText}»` : ""}${order.customTextFont ? ` • шрифт: ${order.customTextFont}` : ""}`
       : "",
     order.deliveryCity ? `🏙 ${order.deliveryCity}` : "",
@@ -248,7 +256,10 @@ const sendOrderToTelegram = async (order, attachments = []) => {
       try {
         const buffer = fs.readFileSync(att.path);
         const filename = att.originalName || att.filename || "image.jpg";
-        photos.push({ buffer, filename });
+        const position = order.items?.findIndex((item) => item.id === att.orderItemId) ?? -1;
+        const line = position >= 0 ? order.items[position] : null;
+        const label = line ? `Заказ #${order.id}, позиция ${position + 1}: ${line.productType}, ${line.color}, ${line.size}, ${line.quantity} шт.\n${line.embroideryTypeRu || line.embroideryType}${line.comment ? `\nПожелания: ${line.comment}` : ""}` : "";
+        photos.push({ buffer, filename, label });
       } catch (e) {
         console.warn("Не удалось прочитать файл вложения:", att.path, e.message);
       }
@@ -265,16 +276,29 @@ const sendOrderToTelegram = async (order, attachments = []) => {
       continue;
     }
 
+    if (photos.length > 10) {
+      // Telegram albums have a hard 10-photo limit. Do not lose the rest of a
+      // multi-item order: send numbered batches, retaining every original photo.
+      await sendText(chatId, textMessage, { parseMode: null });
+      for (let start = 0; start < photos.length; start += 10) {
+        const batch = photos.slice(start, start + 10);
+        const batchCaption = `Заказ #${order.id}. Фотографии ${start + 1}–${start + batch.length} из ${photos.length}`;
+        if (batch.length === 1) await sendPhotoCard(chatId, batch[0].buffer, fitTelegramMessage([batch[0].label, batchCaption].filter(Boolean).join("\n\n"), TELEGRAM_CAPTION_LIMIT), batch[0].filename);
+        else await sendMediaGroupCard(chatId, batch, batchCaption, batch.map((photo) => photo.label));
+      }
+      continue;
+    }
+
     const reusableMedia = cachedFileIds.length === photos.length ? cachedFileIds : null;
     const media = reusableMedia || photos;
     const result = media.length === 1
       ? await sendPhotoCard(
           chatId,
           reusableMedia ? media[0] : media[0].buffer,
-          caption,
+          fitTelegramMessage([photos[0].label, caption].filter(Boolean).join("\n\n"), TELEGRAM_CAPTION_LIMIT),
           reusableMedia ? undefined : media[0].filename
         )
-      : await sendMediaGroupCard(chatId, media, caption);
+      : await sendMediaGroupCard(chatId, media, caption, photos.map((photo) => photo.label));
 
     if (!result.sent) {
       await sendText(chatId, textMessage, { parseMode: null });

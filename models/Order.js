@@ -6,6 +6,7 @@ const Order = sequelize.define("order", {
 
   // Inventory linkage
   inventoryId: { type: DataTypes.INTEGER, allowNull: true, references: { model: "inventories", key: "id" }, onDelete: "SET NULL" },
+  isCartOrder: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
 
   // Customer
   phone: { type: DataTypes.STRING, allowNull: false },

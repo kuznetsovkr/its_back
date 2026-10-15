@@ -76,7 +76,7 @@ router.post("/link", requireOrderAccess, paymentLinkRateLimit, async (req, res) 
         return { status: 409, message: "Оплата для этого заказа не требуется" };
       }
 
-      await assertActiveReservation(order.id, transaction);
+      await assertActiveReservation(order.id, transaction, order.isCartOrder);
       if (order.certificateId) {
         const { assertCertificateReservationForOrder } = require("../services/giftCertificates");
         await assertCertificateReservationForOrder({ order, transaction });
@@ -234,8 +234,8 @@ router.post(
           throw new Error(finalized.message || "Order finalization failed");
         }
       } catch (error) {
-        if (order.certificateId && (error.name === "GiftCertificateError" ||
-          (error instanceof ReservationError && error.code === "paid_order_out_of_stock"))) {
+        if ((order.certificateId || order.isCartOrder) && (error.name === "GiftCertificateError" ||
+          (error instanceof ReservationError && ["paid_order_out_of_stock", "cart_reservation_incomplete"].includes(error.code)))) {
           const { recordCertificatePaymentReview } = require("../services/certificateOrderReview");
           const notify = await recordCertificatePaymentReview({ orderId: order.id, paymentId });
           if (notify) {

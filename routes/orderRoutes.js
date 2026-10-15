@@ -336,13 +336,15 @@ router.put("/update-status/:orderId", requireAdmin, orderMutationRateLimit, asyn
                 const releasedInventory = await releaseReservationForOrder(
                     orderId,
                     "cancelled",
-                    transaction
+                    transaction,
+                    lockedOrder.isCartOrder
                 );
                 releasedInventoryId = releasedInventory?.id || null;
                 if (lockedOrder.paymentStatus === "pending") {
                     lockedOrder.paymentStatus = "cancelled";
                 }
                 if (lockedOrder.certificateId) await releaseCertificateForOrder({ orderId, reason: "cancelled", transaction });
+                if (lockedOrder.isCartOrder && lockedOrder.paymentStatus !== "paid") await require("../services/cartOrderLifecycle").unlockCartOrder(orderId, transaction);
             }
             lockedOrder.status = status;
             await lockedOrder.save({ transaction });
@@ -439,8 +441,10 @@ router.get("/all", requireAdmin, orderReadRateLimit, async (_req, res) => {
         const shipmentByOrderId = new Map(
             shipments.map((shipment) => [Number(shipment.orderId), shipment])
         );
+        const items = orders.length ? await require("../models/OrderItem").findAll({ where: { orderId: orders.map((order) => order.id) }, order: [["position", "ASC"]], raw: true }) : [];
         res.json(orders.map((order) => ({
             ...order.get({ plain: true }),
+            items: items.filter((item) => item.orderId === order.id),
             shipment: shipmentByOrderId.get(Number(order.id)) || null,
         })));
     } catch (error) {
@@ -525,13 +529,14 @@ router.get("/:orderId/attachments", requireOrderAccess, orderReadRateLimit, asyn
 
     const attachments = await OrderAttachment.findAll({
       where: { orderId },
-      attributes: ["id", "originalName", "mime", "size"],
+      attributes: ["id", "orderItemId", "originalName", "mime", "size"],
       order: [["id", "ASC"]],
     });
 
     return res.json(
       attachments.map((attachment) => ({
         id: attachment.id,
+        orderItemId: attachment.orderItemId,
         originalName: attachment.originalName,
         mime: attachment.mime,
         size: attachment.size,
@@ -606,8 +611,11 @@ router.get('/:id', requireOrderAccess, orderReadRateLimit, async (req, res) => {
   });
 
   // Отдаём только то, что нужно фронту
+  const items = order.isCartOrder ? await require("../models/OrderItem").findAll({ where: { orderId: id }, order: [["position", "ASC"]], raw: true }) : [];
   res.json({
     id: order.id,
+    isCartOrder: Boolean(order.isCartOrder),
+    items,
     hasBuyerEmail: Boolean(order.email),
     deliveryMode: order.deliveryMode || null,
     paymentStatus: order.paymentStatus || null, // 'pending' | 'paid' | 'failed'
