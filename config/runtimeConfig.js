@@ -69,6 +69,9 @@ const validateRuntimeConfig = (env = process.env) => {
   const requireValue = (name) => {
     if (!String(env[name] || "").trim()) errors.push(`${name} is required`);
   };
+  if (!String(env.DADATA_API_KEY || env.DADATA_TOKEN || "").trim()) {
+    errors.push("DADATA_API_KEY is required for delivery-city selection");
+  }
 
   [
     "DB_HOST",

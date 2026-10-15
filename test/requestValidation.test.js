@@ -1,5 +1,8 @@
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
+const { issueCitySelection } = require("../lib/deliveryCity");
+process.env.ORDER_ACCESS_SECRET ||= "fixture-city-validation-secret-".repeat(3);
+const pickupCityToken = () => issueCitySelection({ id: "cdek:278", name: "Красноярск", label: "г Красноярск", longitude: 92.868, latitude: 56.0106, pickup: true }).token;
 
 const {
   RequestValidationError,
@@ -172,15 +175,26 @@ test("delivery methods preserve legacy drafts and reject inconsistent CDEK data"
 });
 
 test("pickup address is server-owned and postal requests require a bounded office description", () => {
-  assert.equal(validateOrderCreateInput({ ...validOrder(), deliveryMethod: "pickup", deliveryAddress: "Подменённый адрес", deliveryCity: "Подменённый город" }, [{}]).deliveryAddress,
+  assert.equal(validateOrderCreateInput({ ...validOrder(), deliveryMethod: "pickup", deliveryCityToken: pickupCityToken(), deliveryAddress: "Подменённый адрес", deliveryCity: "Подменённый город" }, [{}]).deliveryAddress,
     "Красноярск, ул. Ломоносова, 11");
-  assert.equal(validateOrderCreateInput({ ...validOrder(), deliveryMethod: "pickup", deliveryAddress: "" }, [{}]).deliveryMethod, "pickup");
+  assert.equal(validateOrderCreateInput({ ...validOrder(), deliveryMethod: "pickup", deliveryCityToken: pickupCityToken(), deliveryAddress: "" }, [{}]).deliveryMethod, "pickup");
   assert.throws(() => validateOrderCreateInput({ ...validOrder(), deliveryMethod: "russian_post", deliveryAddress: " " }, [{}]),
     (error) => error.field === "deliveryAddress" && error.message.includes("Почты России"));
   assert.throws(() => validateOrderCreateInput({ ...validOrder(), deliveryMethod: "russian_post", deliveryAddress: "Я".repeat(301) }, [{}]), (error) => error.field === "deliveryAddress");
-  assert.equal(validateOrderCreateInput({ ...validOrder(), deliveryMethod: "russian_post", deliveryAddress: "Я".repeat(241) }, [{}]).deliveryAddress.length, 241);
+  assert.equal(validateOrderCreateInput({ ...validOrder(), deliveryMethod: "russian_post", deliveryCityToken: pickupCityToken(), deliveryAddress: "Я".repeat(241) }, [{}]).deliveryAddress.length, 241);
   assert.throws(() => validateOrderCreateInput({ ...validOrder(), deliveryMethod: "russian_post", deliveryAddress: "Я".repeat(242) }, [{}]), (error) => error.field === "deliveryAddress");
   assert.throws(() => validateOrderCreateInput({ ...validOrder(), deliveryMethod: "russian_post", deliveryAddress: "Адрес\nс подменой" }, [{}]), (error) => error.field === "deliveryAddress");
+});
+
+test("pickup and postal requests require a server-confirmed city and pickup is limited to Krasnoyarsk", () => {
+  for (const deliveryMethod of ["pickup", "russian_post"]) {
+    for (const deliveryCityToken of ["", "demo-city", pickupCityToken().replace(/^city1/, "v1")]) {
+      assert.throws(() => validateOrderCreateInput({ ...validOrder(), deliveryMethod, deliveryCityToken }, [{}]), error => error.field === "deliveryCityToken");
+    }
+  }
+  const moscow = issueCitySelection({ id: "cdek:44", name: "Москва", label: "г Москва", longitude: 37.62, latitude: 55.75, pickup: false }).token;
+  assert.throws(() => validateOrderCreateInput({ ...validOrder(), deliveryMethod: "pickup", deliveryCityToken: moscow }, [{}]), /Самовывоз доступен/);
+  assert.equal(validateOrderCreateInput({ ...validOrder(), deliveryMethod: "russian_post", deliveryCityToken: moscow }, [{}]).selectedCity.name, "Москва");
 });
 
 test("public CDEK calculation replaces origin and uses a package profile from the catalog", () => {

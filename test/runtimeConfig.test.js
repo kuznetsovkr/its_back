@@ -19,6 +19,7 @@ const validProductionEnv = () => ({
   ADMIN_PASSWORD: "strong-admin-password",
   JWT_SECRET: "jwt-secret-that-is-longer-than-32-bytes",
   ORDER_ACCESS_SECRET: "order-secret-that-is-different-and-long",
+  DADATA_API_KEY: "fixture-dadata-suggestions-key",
   ORDER_ACCESS_TOKEN_TTL_HOURS: "24",
   ORDER_RESERVATION_TTL_MINUTES: "30",
   CDEK_BASE_URL: "https://api.cdek.ru/v2",
@@ -56,6 +57,13 @@ test("valid production configuration passes the startup gate", () => {
     validated: true,
     mode: "production",
   });
+});
+
+test("production cannot deploy checkout without city suggestions configured", () => {
+  const env = validProductionEnv();
+  delete env.DADATA_API_KEY;
+  assert.throws(() => validateRuntimeConfig(env), /DADATA_API_KEY is required/);
+  assert.equal(validateRuntimeConfig({ ...env, DADATA_TOKEN: "fixture-legacy-token" }).validated, true);
 });
 
 test("production startup rejects missing and unsafe critical settings", () => {

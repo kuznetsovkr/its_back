@@ -36,6 +36,7 @@ const {
   PricingError,
   calculateCdekDelivery,
   calculateMerchandisePrice,
+  resolveOffice,
 } = require("../services/orderPricing");
 const { getPricingExtras } = require("../services/pricingConfig");
 const { GiftCertificateError } = require("../lib/giftCertificateRules");
@@ -142,7 +143,8 @@ router.post(
     });
     const paymentAmount = isManualFlow ? null : paymentSnapshot.paymentAmount;
     const paymentTestMode = !isManualFlow && isPaykeeperTestMode();
-    const delivery = getOrderDelivery({ deliveryMethod, deliveryAddress, cdekQuote });
+    const requestOffice = isManualFlow && deliveryMethod === "cdek" ? await resolveOffice(cdekAddress) : null;
+    const delivery = getOrderDelivery({ deliveryMethod, deliveryAddress, cdekQuote: cdekQuote || requestOffice, selectedCity: validated.selectedCity });
 
     // Создание заказа и резервирование единицы выполняются атомарно.
     const { order, reservation } = await createOrderWithReservation({
@@ -261,6 +263,7 @@ router.post(
       orderToken: createOrderAccessToken(order.id),
       cdekNumber: null,
       deliveryMode: delivery.mode,
+      deliveryCity: delivery.city,
       pricePending: isManualFlow,
       merchandisePrice: merchandiseQuote.merchandisePrice,
       deliveryPrice: cdekQuote?.deliveryPrice ?? null,

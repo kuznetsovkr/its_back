@@ -2,8 +2,9 @@ const assert = require("node:assert/strict");
 const { beforeEach, test } = require("node:test");
 const express = require("express");
 const multer = require("multer");
+const { issueCitySelection } = require("../lib/deliveryCity");
 
-const calls = { orders: [], cdekQuotes: [], attachments: [], invoices: [] };
+const calls = { orders: [], cdekQuotes: [], offices: [], attachments: [], invoices: [] };
 const mockModule = (request, exports) => {
   const filename = require.resolve(request);
   require.cache[filename] = { id: filename, filename, loaded: true, exports };
@@ -18,7 +19,10 @@ mockModule("../models/OrderAttachment", { bulkCreate: async (values) => calls.at
 mockModule("../models/OrderShipment", {});
 mockModule("../services/inventoryResolver", { findInventoryForOrder: async () => inventory });
 mockModule("../services/pricingConfig", { getPricingExtras: async () => ({ Patronus: 5000, petFace: 2000 }) });
-mockModule("../services/orderPricing", { ...pricing, calculateCdekDelivery: async (input) => {
+mockModule("../services/orderPricing", { ...pricing, resolveOffice: async (address) => {
+  calls.offices.push(address);
+  return { cityCode: 278, office: { code: "KRS1", location: { city: "Красноярск", address: "Мира, 1" } } };
+}, calculateCdekDelivery: async (input) => {
   calls.cdekQuotes.push(input);
   return { deliveryPrice: 742, tariffCode: 136, office: { code: "KRS1", location: { city: "Красноярск", address: "Мира, 1" } } };
 } });
@@ -71,6 +75,7 @@ const createBody = (overrides) => {
   const body = new FormData();
   for (const [name, value] of Object.entries({ firstName: "Иван", lastName: "Иванов", phone: "+79991234567", privacyConsent: "true",
     productType: "Худи", color: "Чёрный", size: "M", embroideryType: "Car", patronusCount: "1", petFaceCount: "1",
+    deliveryCityToken: issueCitySelection({ id: "cdek:278", name: "Красноярск", label: "г Красноярск", longitude: 92.868, latitude: 56.0106, pickup: true }).token,
     deliveryMethod: "russian_post", deliveryAddress: "660075, Красноярск, ул. Маерчака, 5", ...overrides })) body.append(name, value);
   body.append("images", new Blob(["fixture bytes; decoding is tested separately"], { type: "image/png" }), "photo.png");
   return body;
@@ -128,4 +133,23 @@ test("unapproved delivery cannot apply a certificate or mix in stale CDEK data",
   }
   assert.equal(calls.orders.length, 0);
   assert.equal(calls.cdekQuotes.length, 0);
+});
+
+test("custom CDEK request saves the server office city without trusting a supplied city or calculating a tariff", async (t) => {
+  const url = await openApp(t);
+  const response = await fetch(url + "/orders/create", { method: "POST", body: createBody({
+    embroideryType: "custom", customOption: JSON.stringify({ image: true, text: false }),
+    deliveryMethod: "cdek", cdekMode: "office", cdekAddress: JSON.stringify({ code: "KRS1", city: "Подменённый город" }),
+    deliveryCity: "Неверный город", deliveryAddress: "Неверный адрес",
+  }) });
+  assert.equal(response.status, 200);
+  const data = await response.json();
+  assert.equal(data.pricePending, true);
+  assert.equal(data.deliveryCity, "Красноярск");
+  assert.equal(calls.orders[0].orderValues.deliveryCity, "Красноярск");
+  assert.equal(calls.orders[0].orderValues.deliveryAddress, "СДЭК, KRS1, Мира, 1, до ПВЗ");
+  assert.equal(calls.orders[0].shipmentValues, null);
+  assert.deepEqual(calls.offices, [{ code: "KRS1" }]);
+  assert.equal(calls.cdekQuotes.length, 0);
+  assert.equal(calls.invoices.length, 0);
 });

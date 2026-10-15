@@ -278,5 +278,6 @@ module.exports = {
   getCdekTariffCode,
   getGoodsPreset,
   getPublicCdekConfig,
+  resolveOffice,
   getPriceCatalog,
 };

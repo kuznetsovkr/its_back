@@ -87,6 +87,7 @@ app.use(express.json({ limit: "64kb", strict: true }));
 
 app.use("/api/auth", authRoutes);
 app.use("/api/public-config", publicConfigRoutes);
+app.use("/api/delivery/cities", require("./routes/deliveryCityRoutes").createDeliveryCityRouter());
 app.use("/api/certificates", createCertificateRouter());
 app.use("/api/admin/certificates", createCertificateAdminRouter());
 app.use("/api/orders", orderRoutes);

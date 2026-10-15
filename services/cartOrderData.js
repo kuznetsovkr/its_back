@@ -18,7 +18,7 @@ const getCartOrderData = async (orderId, transaction) => {
     buyer: { firstName: order.firstName, lastName: order.lastName, middleName: order.middleName || "", phone: order.phone,
       email: order.email || "", preferredContact: order.preferredContact || "", comment: order.comment || "",
       recipientFullName: order.recipientFullName, recipientPhone: order.recipientPhone, deliveryComment: order.deliveryComment || "" },
-    officeCode: shipment?.deliveryPoint || "", deliveryAddress: order.deliveryAddress,
+    officeCode: shipment?.deliveryPoint || "", deliveryAddress: order.deliveryAddress, deliveryCity: order.deliveryCity,
     packages: shipment?.packages || [], items,
   };
 };
