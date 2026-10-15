@@ -106,6 +106,32 @@ test("order validation enforces bounded counters and the selected custom mode", 
   );
 });
 
+test("inscription fonts accept supplied faces and preserve their canonical order value", () => {
+  const fonts = ["Book Antiqua", "Century Schoolbook Bold", "Lumios Marker", "Montserrat Bold",
+    "Onest Bold", "Swanky and Moo Moo", "Unbounded", "Vasek Italic"];
+  for (const customTextFont of fonts) {
+    const customText = customTextFont === "Swanky and Moo Moo" ? "Love 2026!" : "Привет, Ёжик! Love 2026";
+    const validated = validateOrderCreateInput({ ...validOrder(), embroideryType: "custom",
+      customOption: JSON.stringify({ image: false, text: true }), customText, customTextFont }, []);
+    assert.equal(validated.customTextFont, customTextFont);
+    assert.equal(validated.customText, customText);
+  }
+});
+
+test("inscription fonts reject unsupported names and Cyrillic in the Latin-only face", () => {
+  const custom = { ...validOrder(), embroideryType: "custom", customOption: JSON.stringify({ image: false, text: true }) };
+  for (const customTextFont of ["ITS Embroidery Montserrat", "Vasek", "url(evil)", "Unknown Font"]) {
+    assert.throws(() => validateOrderCreateInput({ ...custom, customTextFont, customText: "Love" }, []),
+      error => error.field === "customTextFont");
+  }
+  for (const customText of ["Привет", "Loveя", "Ё", "Ї"]) {
+    assert.throws(() => validateOrderCreateInput({ ...custom, customTextFont: "Swanky and Moo Moo", customText }, []),
+      error => error.field === "customTextFont" && /не поддерживает кириллицу/.test(error.message));
+  }
+  // The new check must not affect image-based embroidery with stale text fields.
+  assert.equal(validateOrderCreateInput({ ...validOrder(), customTextFont: "Swanky and Moo Moo", customText: "Привет" }, [{}]).customTextFont, "");
+});
+
 test("another recipient requires their own valid phone", () => {
   const namedRecipient = { ...validOrder(), recipientFullName: "Петров Пётр" };
   assert.throws(
