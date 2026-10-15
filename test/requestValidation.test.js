@@ -88,16 +88,18 @@ test("order validation enforces bounded counters and the selected custom mode", 
     embroideryType: "custom",
     customOption: JSON.stringify({ image: false, text: true }),
     customText: "Надпись",
-    customTextFont: "Georgia",
+    customTextFont: "Onest Bold",
   };
   const validated = validateOrderCreateInput(custom, []);
   assert.equal(validated.embroideryTypeRu, "Своя вышивка — надпись");
-  assert.equal(validated.customTextFont, "Georgia");
+  assert.equal(validated.customTextFont, "Onest Bold");
   assert.equal(validated.recipientFullName, "Иванов Иван");
   assert.equal(validated.preferredContact, "telegram");
 
-  const comicSans = validateOrderCreateInput({ ...custom, customTextFont: "Comic Sans MS" }, []);
-  assert.equal(comicSans.customTextFont, "Comic Sans MS");
+  for (const customTextFont of ["Arial", "Courier New", "Georgia", "Times New Roman", "Comic Sans MS"]) {
+    assert.throws(() => validateOrderCreateInput({ ...custom, customTextFont }, []),
+      error => error.field === "customTextFont" && /актуального списка/.test(error.message));
+  }
 
   assert.throws(
     () => validateOrderCreateInput({ ...custom, customOption: "{}" }, []),
