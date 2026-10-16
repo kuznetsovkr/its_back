@@ -3,9 +3,13 @@
 ## Gift certificates
 
 See [gift certificate rules and implementation stages](../docs/gift-certificates.md).
-Accounting, purchase UI, PayKeeper callbacks and an email delivery outbox are
-implemented. New purchases remain disabled until SMTP is configured and tested.
-Keep `CERTIFICATE_PURCHASE_ENABLED=0` until redemption is implemented too.
+Accounting, purchase UI, PayKeeper callbacks, redemption and an email delivery
+outbox are implemented. On 2026-10-16, SMTP.BZ delivery was verified and purchases
+were enabled on staging with `PAYKEEPER_TEST_MODE=1` (1 RUB). The real
+purchase → payment callback → certificate email → redemption check still needs
+to be completed by the operator. Keep new production purchases disabled until
+its SMTP, independent secrets and end-to-end checks are ready. Never overwrite
+an existing certificate encryption key during deployment.
 
 ## Browser tests before deployment
 
