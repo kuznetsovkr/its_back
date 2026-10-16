@@ -115,26 +115,39 @@ test("inscription fonts accept supplied faces and preserve their canonical order
   const fonts = ["Book Antiqua", "Century Schoolbook Bold", "Lumios Marker", "Montserrat Bold",
     "Onest Bold", "Swanky and Moo Moo", "Unbounded", "Vasek Italic"];
   for (const customTextFont of fonts) {
-    const customText = customTextFont === "Swanky and Moo Moo" ? "Love 2026!" : "Привет, Ёжик! Love 2026";
+    const customText = "Привет, Ёжик! Love 2026";
     const validated = validateOrderCreateInput({ ...validOrder(), embroideryType: "custom",
       customOption: JSON.stringify({ image: false, text: true }), customText, customTextFont }, []);
     assert.equal(validated.customTextFont, customTextFont);
-    assert.equal(validated.customText, customText);
+    assert.equal(validated.customText, customTextFont === "Onest Bold" ? customText.toLowerCase() : customText);
   }
 });
 
-test("inscription fonts reject unsupported names and Cyrillic in the Latin-only face", () => {
+test("inscription fonts reject unsupported names and allow Cyrillic in replacement Swanky", () => {
   const custom = { ...validOrder(), embroideryType: "custom", customOption: JSON.stringify({ image: false, text: true }) };
   for (const customTextFont of ["ITS Embroidery Montserrat", "Vasek", "url(evil)", "Unknown Font"]) {
     assert.throws(() => validateOrderCreateInput({ ...custom, customTextFont, customText: "Love" }, []),
       error => error.field === "customTextFont");
   }
-  for (const customText of ["Привет", "Loveя", "Ё", "Ї"]) {
-    assert.throws(() => validateOrderCreateInput({ ...custom, customTextFont: "Swanky and Moo Moo", customText }, []),
-      error => error.field === "customTextFont" && /не поддерживает кириллицу/.test(error.message));
+  for (const customText of ["Привет", "Loveя", "Ёё", "АБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ"]) {
+    assert.equal(validateOrderCreateInput({ ...custom, customTextFont: "Swanky and Moo Moo", customText }, []).customText, customText);
   }
   // The new check must not affect image-based embroidery with stale text fields.
   assert.equal(validateOrderCreateInput({ ...validOrder(), customTextFont: "Swanky and Moo Moo", customText: "Привет" }, [{}]).customTextFont, "");
+});
+
+test("Onest is lowercase in the saved DTO even for direct API requests; other data is preserved", () => {
+  const customText = "ПрИвЕт, ЁЖИК! LOVE\n2026";
+  const body = { ...validOrder(), embroideryType: "custom", customOption: JSON.stringify({ image: false, text: true }),
+    customTextFont: "Onest Bold", customText, comment: "Сохранить Регистр" };
+  const result = validateOrderCreateInput(body, []);
+  assert.equal(result.customText, "привет, ёжик! love\n2026");
+  assert.equal(result.customTextFont, "Onest Bold");
+  assert.equal(result.comment, "Сохранить Регистр");
+  assert.equal(result.firstName, "Иван");
+  assert.equal(body.customText, customText);
+  assert.equal(validateOrderCreateInput({ ...body, embroideryType: "Car" }, [{}]).customText, customText);
+  assert.equal(validateOrderCreateInput({ ...body, customOption: JSON.stringify({ image: true, text: false }) }, [{}]).customText, customText);
 });
 
 test("another recipient requires their own valid phone", () => {
