@@ -6,16 +6,24 @@ Builds and deploys the committed frontend and backend revisions to ITS staging.
 
 .DESCRIPTION
 The script requires clean frontend and backend Git worktrees. It runs local
-tests, builds the frontend with staging URLs, creates immutable archives and
+tests and frontend linters, builds with staging URLs, creates immutable archives and
 uploads them over SSH. The remote helper installs production dependencies,
 runs backend tests and database migrations, atomically switches /srv/its/current,
 then rolls the application back if the post-deploy smoke test fails.
+Full browser tests run by default. Use -Fast only for small UI/content changes:
+it skips browser E2E, not unit tests, linters, build or server-side safeguards.
 
 .EXAMPLE
 .\its_back\deploy-stage.ps1
 
 .EXAMPLE
 .\its_back\deploy-stage.ps1 -ValidateOnly
+
+.EXAMPLE
+.\its_back\deploy-stage.ps1 -Fast
+
+.EXAMPLE
+.\its_back\deploy-stage.ps1 -Fast -ValidateOnly
 #>
 
 [CmdletBinding()]
@@ -26,6 +34,7 @@ param(
     [string]$SshKeyPath = "$env:USERPROFILE\.ssh\its_firstvds_codex",
     [ValidateRange(0, 60)]
     [int]$SshConnectionCooldownSeconds = 15,
+    [switch]$Fast,
     [switch]$ValidateOnly
 )
 
@@ -243,6 +252,34 @@ function Set-ProcessEnvironmentValue {
     [Environment]::SetEnvironmentVariable($Name, $Value, "Process")
 }
 
+function Invoke-LocalChecks {
+    param(
+        [Parameter(Mandatory = $true)][string]$FrontendRoot,
+        [Parameter(Mandatory = $true)][string]$BackendRoot,
+        [switch]$Fast
+    )
+
+    if ($Fast) {
+        Write-Warning "Fast mode is for small UI/content changes only. Use a full deployment for checkout, payments, cart logic, authentication, delivery, database or dependency changes."
+    }
+
+    Write-Step "Running local tests"
+    Invoke-NativeCommand -FilePath "npm.cmd" -Arguments @("test") -WorkingDirectory $FrontendRoot
+    Invoke-NativeCommand -FilePath "npm.cmd" -Arguments @("test") -WorkingDirectory $BackendRoot
+
+    Write-Step "Running frontend linters"
+    Invoke-NativeCommand -FilePath "npm.cmd" -Arguments @("run", "lint") -WorkingDirectory $FrontendRoot
+    Invoke-NativeCommand -FilePath "npm.cmd" -Arguments @("run", "lint:styles") -WorkingDirectory $FrontendRoot
+
+    if ($Fast) {
+        Write-Step "Skipping browser end-to-end tests (explicit -Fast mode)"
+    }
+    else {
+        Write-Step "Running browser end-to-end tests"
+        Invoke-NativeCommand -FilePath "npm.cmd" -Arguments @("run", "test:e2e") -WorkingDirectory $FrontendRoot
+    }
+}
+
 $BackendRoot = $PSScriptRoot
 $WorkspaceRoot = Split-Path -Parent $BackendRoot
 $FrontendRoot = Join-Path $WorkspaceRoot "its_prototype"
@@ -287,6 +324,7 @@ $SshOptions = @(
     "-o", "ServerAliveCountMax=3"
 )
 $RemoteTarget = "${SshUser}@${ServerAddress}"
+$DeploymentTimer = [Diagnostics.Stopwatch]::StartNew()
 
 try {
     Write-Step "Checking Git worktrees"
@@ -308,17 +346,14 @@ try {
     Write-Host "Release: $ReleaseId"
     Write-Host "Frontend commit: $FrontendCommit"
     Write-Host "Backend commit:  $BackendCommit"
+    $DeploymentMode = if ($Fast) { "FAST (browser E2E skipped)" } else { "FULL" }
+    Write-Host "Mode: $DeploymentMode"
 
     Write-Step "Installing deterministic local dependencies"
     Invoke-NativeCommand -FilePath "npm.cmd" -Arguments @("ci", "--no-audit", "--no-fund") -WorkingDirectory $FrontendRoot
     Invoke-NativeCommand -FilePath "npm.cmd" -Arguments @("ci", "--no-audit", "--no-fund") -WorkingDirectory $BackendRoot
 
-    Write-Step "Running local tests"
-    Invoke-NativeCommand -FilePath "npm.cmd" -Arguments @("test") -WorkingDirectory $FrontendRoot
-    Invoke-NativeCommand -FilePath "npm.cmd" -Arguments @("test") -WorkingDirectory $BackendRoot
-
-    Write-Step "Running browser end-to-end tests"
-    Invoke-NativeCommand -FilePath "npm.cmd" -Arguments @("run", "test:e2e") -WorkingDirectory $FrontendRoot
+    Invoke-LocalChecks -FrontendRoot $FrontendRoot -BackendRoot $BackendRoot -Fast:$Fast
 
     Write-Step "Building frontend for staging"
     $buildVariables = @(
@@ -480,4 +515,6 @@ finally {
     if ($TemporaryDirectory -and (Test-Path -LiteralPath $TemporaryDirectory)) {
         Remove-Item -LiteralPath $TemporaryDirectory -Recurse -Force -ErrorAction SilentlyContinue
     }
+    $DeploymentTimer.Stop()
+    Write-Host ("Elapsed: {0:hh\:mm\:ss}" -f $DeploymentTimer.Elapsed)
 }

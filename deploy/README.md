@@ -11,10 +11,40 @@ to be completed by the operator. Keep new production purchases disabled until
 its SMTP, independent secrets and end-to-end checks are ready. Never overwrite
 an existing certificate encryption key during deployment.
 
-## Browser tests before deployment
+## Full and fast staging deployment
 
-The staging deploy script runs the frontend Playwright suite before creating
-or uploading a release. On a new workstation, install its Chromium runtime
+Run from `C:\development\its` in local PowerShell (not inside the server's SSH
+session), after committing both worktrees:
+
+```powershell
+# Full deployment: the default, including browser tests.
+.\its_back\deploy-stage.ps1
+
+# Fast deployment: small CSS, text, image and other presentational changes.
+.\its_back\deploy-stage.ps1 -Fast
+
+# Run fast checks, build and archive locally without connecting or uploading.
+.\its_back\deploy-stage.ps1 -Fast -ValidateOnly
+```
+
+`-Fast` skips **only the full Playwright browser suite**. Both modes keep clean
+Git checks, deterministic `npm ci`, frontend/backend unit tests, frontend ESLint
+and Stylelint, a non-demo staging build, SEO asset checks, archive checksums,
+server-side tests and migrations, atomic activation, smoke tests and automatic
+application rollback on a failed server smoke test. The selected mode and total
+elapsed time are printed in the log. A failed unit test, linter or build still
+stops the deployment. `-ValidateOnly` never uploads or switches a server release.
+
+Choose full mode for order/cart logic, payments, certificates, authentication,
+delivery, uploads, database migrations, dependency updates and before production.
+Fast mode does not replace checking the changed screen on staging. It does not
+detect which files changed automatically; choosing `-Fast` is an explicit operator
+decision. No server environment values or credentials are changed by either mode.
+
+## Browser tests before full deployment
+
+By default, the staging deploy script runs the frontend Playwright suite before
+creating or uploading a release. On a new workstation, install its Chromium runtime
 once:
 
 ```powershell
