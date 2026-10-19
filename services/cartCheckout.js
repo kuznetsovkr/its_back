@@ -6,6 +6,7 @@ const { hashCheckout, assertCartRevision, assertCartMutable } = require("../lib/
 const { ORDER_UPLOAD_DIR, inspectStoredImage, isPathInside } = require("../lib/uploadSecurity");
 const { calculateMerchandisePrice, calculateCdekDelivery, getGoodsPreset } = require("./orderPricing");
 const { getOrderDelivery } = require("../lib/orderDelivery");
+const { postalPaymentDelivery, cartPostalIdentity } = require("../lib/postalDelivery");
 const { buildOrderPaymentSnapshot, publicOrderPayment, rublesToKopecks } = require("./orderCertificatePricing");
 const { quoteCertificateForOrder, reserveCertificateForOrder, releaseCertificateForOrder } = require("./giftCertificates");
 const { getReservationTtlMs, releaseReservationForOrder } = require("./inventoryReservations");
@@ -55,6 +56,7 @@ const createCartCheckoutService = (overrides = {}) => {
     return { lines, inventoryById, merchandisePrice: lines.reduce((sum, item) => sum + item.linePrice, 0) };
   };
   const fingerprint = (priced, input, delivery, payment) => hashCheckout({ revision: input.revision, officeCode: input.officeCode,
+    postal: cartPostalIdentity(input),
     certificate: hashCheckout(String(input.certificateCode || "").trim().toUpperCase()),
     lines: priced.lines.map((line) => [line.id, line.requestHash, line.quantity, line.unitPrice, line.parcel]),
     deliveryPrice: delivery.deliveryPrice, tariffCode: delivery.tariffCode, packages: delivery.packages,
@@ -65,7 +67,8 @@ const createCartCheckoutService = (overrides = {}) => {
     const priced = await priceItems(await rows(cart.id));
     const packages = priced.lines.flatMap((line) => Array.from({ length: line.quantity }, () => ({ ...line.parcel })));
     packages.forEach((parcel, index) => { parcel.number = String(index + 1); });
-    const delivery = await deps.calculateDelivery({ packages, cdekMode: "office", cdekAddress: { code: input.officeCode } });
+    const delivery = input.deliveryMethod === "russian_post" ? postalPaymentDelivery({ postalPoint: input.postalPoint, selectedCity: input.selectedCity })
+      : await deps.calculateDelivery({ packages, cdekMode: "office", cdekAddress: { code: input.officeCode } });
     const certificate = input.certificateCode ? await quoteCertificateForOrder({ code: input.certificateCode,
       productKopecks: rublesToKopecks(priced.merchandisePrice), deliveryKopecks: rublesToKopecks(delivery.deliveryPrice, true) }) : null;
     const payment = buildOrderPaymentSnapshot({ merchandisePrice: priced.merchandisePrice, deliveryPrice: delivery.deliveryPrice, discountKopecks: certificate?.discountKopecks || 0 });
@@ -74,7 +77,8 @@ const createCartCheckoutService = (overrides = {}) => {
     return { priced, delivery, certificate, payment, quoteHash: fingerprint(priced, input, delivery, payment) };
   };
   const publicQuote = (prepared, input) => ({ currency: "RUB", manual: false, isCartOrder: true, revision: input.revision,
-    merchandisePrice: prepared.priced.merchandisePrice, deliveryPrice: prepared.delivery.deliveryPrice,
+    merchandisePrice: prepared.priced.merchandisePrice, deliveryPrice: prepared.delivery.deliveryPayLater ? null : prepared.delivery.deliveryPrice,
+    deliveryPayLater: Boolean(prepared.delivery.deliveryPayLater),
     totalPrice: prepared.priced.merchandisePrice + prepared.delivery.deliveryPrice,
     ...publicOrderPayment(prepared.payment), quoteHash: prepared.quoteHash, packages: prepared.delivery.packages,
     certificate: prepared.certificate ? { discount: prepared.certificate.discountKopecks / 100, remaining: prepared.certificate.remainingKopecks / 100, expiresAt: prepared.certificate.expiresAt } : null,
@@ -84,7 +88,7 @@ const createCartCheckoutService = (overrides = {}) => {
     quote: async (access, input) => publicQuote(await prepareQuote(access, input), input),
     async create(access, input, requestKey, remoteIp) {
       const key = readUuid(requestKey, "Idempotency-Key");
-      const requestHash = hashCheckout({ revision: input.revision, officeCode: input.officeCode, certificateCode: input.certificateCode, buyer: input.buyer });
+      const requestHash = hashCheckout({ revision: input.revision, officeCode: input.officeCode, certificateCode: input.certificateCode, buyer: input.buyer, postal: cartPostalIdentity(input) });
       await carts.assertAccess(access);
       const replay = async (record, transaction) => {
         if (record.cartId !== access.cartId || record.requestHash !== requestHash) throw new CartError("Запрос оформления изменился. Обновите корзину", "cart_checkout_conflict");
@@ -106,7 +110,8 @@ const createCartCheckoutService = (overrides = {}) => {
           assertCartMutable(cart); assertCartRevision(cart, input.revision);
           const priced = await priceItems(await rows(cart.id, transaction), transaction);
           if (fingerprint(priced, input, prepared.delivery, prepared.payment) !== input.quoteHash) throw new CartError("Стоимость или состав корзины изменились. Пересчитайте заказ", "cart_quote_changed");
-          const delivery = getOrderDelivery({ deliveryMethod: "cdek", cdekQuote: prepared.delivery });
+          const delivery = getOrderDelivery({ deliveryMethod: input.deliveryMethod || "cdek", cdekQuote: prepared.delivery,
+            deliveryAddress: input.postalPoint, selectedCity: input.selectedCity });
           const quantity = priced.lines.reduce((sum, line) => sum + line.quantity, 0);
           const order = await Order.create({ ...input.buyer, recipientPhone: input.buyer.recipientPhone,
             email: input.buyer.email || null, isCartOrder: true, inventoryId: null,
@@ -153,7 +158,7 @@ const createCartCheckoutService = (overrides = {}) => {
               await deps.Attachment.create({ orderId: order.id, orderItemId: item.id, path: target, mime: info.mime, originalName: attachment.originalName, size: info.size }, { transaction });
             }
           }
-          await deps.Shipment.create({ orderId: order.id, provider: "cdek", status: "pending_payment", tariffCode: prepared.delivery.tariffCode,
+          if (input.deliveryMethod !== "russian_post") await deps.Shipment.create({ orderId: order.id, provider: "cdek", status: "pending_payment", tariffCode: prepared.delivery.tariffCode,
             deliveryPoint: prepared.delivery.office.code, recipientName: input.buyer.recipientFullName, recipientPhone: input.buyer.recipientPhone,
             declaredValue: priced.merchandisePrice, packages: shipmentPackages }, { transaction });
           await Checkout.create({ id: key, cartId: cart.id, orderId: order.id, requestHash }, { transaction });

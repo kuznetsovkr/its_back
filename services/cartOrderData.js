@@ -13,7 +13,9 @@ const getCartOrderData = async (orderId, transaction) => {
   const shipment = await OrderShipment.findOne({ where: { orderId }, transaction });
   return { orderId: order.id, orderToken: createOrderAccessToken(order.id), isCartOrder: true,
     paymentStatus: order.paymentStatus, status: order.status, pricePending: false, cdekNumber: shipment?.cdekNumber || null,
-    merchandisePrice: order.merchandiseAmountKopecks / 100, deliveryPrice: order.deliveryAmountKopecks / 100,
+    merchandisePrice: order.merchandiseAmountKopecks / 100, deliveryPrice: order.deliveryMode === "russian_post" ? null : order.deliveryAmountKopecks / 100,
+    deliveryMode: order.deliveryMode, deliveryPayLater: order.deliveryMode === "russian_post",
+    postalPoint: order.deliveryMode === "russian_post" ? String(order.deliveryAddress || "").replace(/^Почта России, /, "") : "",
     totalPrice: order.totalPrice, ...publicOrderPayment(order), reservationExpiresAt: reservation?.expiresAt || null,
     buyer: { firstName: order.firstName, lastName: order.lastName, middleName: order.middleName || "", phone: order.phone,
       email: order.email || "", preferredContact: order.preferredContact || "", comment: order.comment || "",

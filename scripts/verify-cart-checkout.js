@@ -36,13 +36,15 @@ const CertificateReservation = require("../models/GiftCertificateReservation");
 const { createCartService } = require("../services/carts");
 const { createCartCheckoutService } = require("../services/cartCheckout");
 const { validateCartItem, CART_RETENTION_MS } = require("../lib/cartRules");
-const { validateCartCheckout } = require("../lib/cartCheckoutRules");
+const { validateCartCheckout, validateCartQuote } = require("../lib/cartCheckoutRules");
+const { issueCitySelection } = require("../lib/deliveryCity");
 const { validateImageFile } = require("../lib/uploadSecurity");
 const { finalizePaidOrder } = require("../services/orderFinalizer");
 const { releaseExpiredReservations, assertActiveReservation } = require("../services/inventoryReservations");
 const { createCertificatePurchase, activateCertificate, getCertificateCodeForDelivery } = require("../services/giftCertificates");
 let now = new Date();
 const verifyTurnstile = async ({ token }) => { if (token !== "fixture") throw Object.assign(new Error("Не пройдена проверка"), { statusCode: 403 }); };
+mock("../services/turnstileVerification", { verifyTurnstileToken: verifyTurnstile, TurnstileVerificationError: class extends Error {} });
 const carts = createCartService({ now: () => now, verifyTurnstile });
 let deliveryPrice = 450;
 const calculateDelivery = async ({ packages, cdekAddress }) => ({ deliveryPrice, tariffCode: 136, packages,
@@ -267,6 +269,67 @@ const run = async () => {
   assert.equal((await bankCallback(cancelOrder.orderId, "1.00", "late")).status, 200);
   assert.equal((await Order.findByPk(cancelOrder.orderId)).paymentStatus, "review");
   assert.equal((await bankCallback(cancelOrder.orderId, "1.00", "late")).status, 200);
+  // Postal checkout: both cart and standalone order pay for merchandise only.
+  // The signed city, address and payment mode survive retries and bank returns.
+  const postalCity = issueCitySelection({ id: "city:278", name: "Красноярск", label: "г Красноярск", longitude: 92.868, latitude: 56.01 });
+  const postalAddress = "660000, Красноярск, Мира, 1";
+  for (const denomination of [null, 1000, 20000]) {
+    const postalCart = await newCart(); await add(postalCart, hoodie);
+    const certificate = denomination ? await issue(denomination) : null;
+    const postalInput = { revision: (await carts.getCart(postalCart)).revision, deliveryMethod: "russian_post", postalPoint: postalAddress,
+      deliveryCityToken: postalCity.token, certificateCode: certificate?.code || "" };
+    const postalQuote = await checkout.quote(postalCart, validateCartQuote(postalInput));
+    assert.equal(postalQuote.deliveryPrice, null); assert.equal(postalQuote.deliveryPayLater, true);
+    assert.deepEqual(postalQuote.packages, []);
+    assert.equal(postalQuote.totalPrice, postalQuote.merchandisePrice);
+    const postalCheckout = validateCartCheckout({ ...postalInput, quoteHash: postalQuote.quoteHash, buyer, turnstileToken: "fixture" });
+    await assert.rejects(checkout.create(postalCart, { ...postalCheckout, postalPoint: "Другой адрес" }, crypto.randomUUID()), { code: "cart_quote_changed" });
+    const postalKey = crypto.randomUUID();
+    const postalOrder = await checkout.create(postalCart, postalCheckout, postalKey);
+    assert.equal((await checkout.create(postalCart, postalCheckout, postalKey)).orderId, postalOrder.orderId);
+    assert.equal(postalOrder.deliveryMode, "russian_post");
+    assert.equal(postalOrder.deliveryPayLater, true);
+    assert.equal(postalOrder.postalPoint, postalAddress);
+    assert.equal(postalOrder.buyer.recipientPhone, "+79998887766");
+    assert.equal(await Shipment.count({ where: { orderId: postalOrder.orderId } }), 0);
+    const postalHeaders = { Origin: process.env.PUBLIC_APP_URL, "Content-Type": "application/json", "X-Order-Access-Token": postalOrder.orderToken };
+    const beforeInvoices = invoices.length;
+    if (denomination === 20000) {
+      assert.equal(postalOrder.amountDue, 0); assert.equal(postalOrder.requiresBankPayment, false);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const completed = await fetch(`${base}/orders/${postalOrder.orderId}/complete-certificate`, { method: "POST", headers: postalHeaders, body: "{}" });
+        assert.equal(completed.status, 200);
+      }
+      assert.equal(invoices.length, beforeInvoices);
+    } else {
+      assert.equal(postalOrder.amountDue, postalQuote.merchandisePrice - (denomination || 0));
+      const linked = await fetch(`${base}/payments/paykeeper/link`, { method: "POST", headers: postalHeaders, body: JSON.stringify({ orderId: postalOrder.orderId }) });
+      assert.equal(linked.status, 200); assert.equal(invoices.length, beforeInvoices + 1);
+      assert.equal((await bankCallback(postalOrder.orderId)).status, 200);
+    }
+    assert.equal((await Order.findByPk(postalOrder.orderId)).paymentStatus, "paid");
+    assert.equal((await Order.findByPk(postalOrder.orderId)).deliveryAmountKopecks, 0);
+    assert.equal(await Shipment.count({ where: { orderId: postalOrder.orderId } }), 0);
+  }
+  const singlePostal = new FormData();
+  for (const [key, value] of Object.entries({ ...buyer, privacyConsent: "true", productType: hoodie.productType, color: hoodie.color, size: hoodie.size,
+    embroideryType: "Car", carDesign: "simple", patronusCount: "1", petFaceCount: "1", turnstileToken: "fixture",
+    deliveryMethod: "russian_post", deliveryCityToken: postalCity.token, deliveryAddress: postalAddress })) singlePostal.append(key, String(value));
+  singlePostal.append("images", new Blob([imageBytes], { type: "image/png" }), "postal.png");
+  const singlePostalResponse = await fetch(`${base}/orders/create`, { method: "POST", headers: { Origin: process.env.PUBLIC_APP_URL }, body: singlePostal });
+  assert.equal(singlePostalResponse.status, 200);
+  const singlePostalOrder = await singlePostalResponse.json();
+  assert.equal(singlePostalOrder.pricePending, false);
+  assert.equal(singlePostalOrder.totalPrice, singlePostalOrder.merchandisePrice);
+  assert.equal(singlePostalOrder.deliveryPayLater, true);
+  assert.equal(await Shipment.count({ where: { orderId: singlePostalOrder.orderId } }), 0);
+  const singlePostalLink = await fetch(`${base}/payments/paykeeper/link`, { method: "POST",
+    headers: { Origin: process.env.PUBLIC_APP_URL, "Content-Type": "application/json", "X-Order-Access-Token": singlePostalOrder.orderToken },
+    body: JSON.stringify({ orderId: singlePostalOrder.orderId }) });
+  assert.equal(singlePostalLink.status, 200);
+  assert.equal((await bankCallback(singlePostalOrder.orderId)).status, 200);
+  assert.equal((await Order.findByPk(singlePostalOrder.orderId)).paymentStatus, "paid");
+  console.log("[postal-test] Standalone and cart merchandise payment, partial/full certificates, replay and no CDEK shipments verified");
   await new Promise((resolve) => server.close(resolve)); server = null;
   console.log("[cart-checkout-test] Atomic grouped stock, CDEK packages, retry/resume, certificates, cancellation/expiry, stale quotes, file rollback and photo retention verified");
 };

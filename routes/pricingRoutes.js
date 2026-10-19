@@ -1,5 +1,6 @@
 const express = require("express");
 const { CAR_DESIGNS, getCarDesignPrices } = require("../lib/carDesigns");
+const { readPostalDestination, postalPaymentDelivery } = require("../lib/postalDelivery");
 const { MAX_PATRONUS_COUNT, MAX_PET_FACE_COUNT } = require("../lib/embroideryLimits");
 const requireTrustedOrigin = require("../middleware/trustedOrigin");
 const requireAdmin = require("../middleware/requireAdmin");
@@ -200,6 +201,7 @@ router.post("/checkout", requireTrustedOrigin, pricingQuoteRateLimit,
         "cdekMode",
         "cdekAddress",
         "certificateCode",
+        "deliveryMethod", "postalPoint", "deliveryCityToken",
       ]),
       "итоговом расчёте"
     );
@@ -217,6 +219,10 @@ router.post("/checkout", requireTrustedOrigin, pricingQuoteRateLimit,
     const petFaceCount = readPetFaceCount(body.petFaceCount);
     const carDesign = readCarDesign(body.carDesign, embroideryType.toLowerCase() === "car" ? "Car" : embroideryType);
     const cdekMode = readString(body.cdekMode, "cdekMode", { max: 16 }).toLowerCase();
+    const deliveryMethod = readString(body.deliveryMethod, "deliveryMethod", { max: 24 }) || (cdekMode ? "cdek" : "manual");
+    if (!["cdek", "russian_post", "pickup", "manual"].includes(deliveryMethod)) throw new RequestValidationError("Выберите способ получения", "deliveryMethod");
+    if (deliveryMethod !== "cdek" && (cdekMode || body.cdekAddress)) throw new RequestValidationError("Данные СДЭК не соответствуют способу получения", "deliveryMethod");
+    const postal = deliveryMethod === "russian_post" ? readPostalDestination(body.postalPoint, body.deliveryCityToken) : null;
     const certificateCode = readString(body.certificateCode, "certificateCode", { max: 80 });
     const cdekAddress = body.cdekAddress
       ? parseJsonObject(body.cdekAddress, "cdekAddress")
@@ -237,7 +243,7 @@ router.post("/checkout", requireTrustedOrigin, pricingQuoteRateLimit,
       carDesign,
       pricingConfig,
     });
-    if (merchandiseQuote.manual || !cdekMode) {
+    if (merchandiseQuote.manual || !["cdek", "russian_post"].includes(deliveryMethod)) {
       if (certificateCode) throw new GiftCertificateError("Сертификат можно применить после расчёта стоимости менеджером", "certificate_manual_price_pending", 400);
       return res.json({
         currency: "RUB",
@@ -248,7 +254,7 @@ router.post("/checkout", requireTrustedOrigin, pricingQuoteRateLimit,
       });
     }
 
-    const deliveryQuote = await calculateCdekDelivery({
+    const deliveryQuote = postal ? postalPaymentDelivery(postal) : await calculateCdekDelivery({
       inventory,
       cdekMode,
       cdekAddress,
@@ -264,7 +270,8 @@ router.post("/checkout", requireTrustedOrigin, pricingQuoteRateLimit,
       currency: "RUB",
       manual: false,
       merchandisePrice: merchandiseQuote.merchandisePrice,
-      deliveryPrice: deliveryQuote.deliveryPrice,
+      deliveryPrice: postal ? null : deliveryQuote.deliveryPrice,
+      deliveryPayLater: Boolean(postal),
       totalPrice,
       ...publicOrderPayment({ ...snapshot, totalPrice }),
       certificate: certificate ? { discount: certificate.discountKopecks / 100, remaining: certificate.remainingKopecks / 100, expiresAt: certificate.expiresAt } : null,

@@ -37,10 +37,13 @@ mockModule("../services/pricingConfig", {
 });
 
 const pricingRoutes = require("../routes/pricingRoutes");
+const { issueCitySelection } = require("../lib/deliveryCity");
 
 test("checkout quote returns a server-calculated delivery and total", async (t) => {
   const previousTestMode = process.env.PAYKEEPER_TEST_MODE;
+  const previousCitySecret = process.env.ORDER_ACCESS_SECRET;
   process.env.PAYKEEPER_TEST_MODE = "1";
+  process.env.ORDER_ACCESS_SECRET = "checkout-quote-city-test-secret";
   const express = require("express");
   const app = express();
   app.use(express.json());
@@ -52,6 +55,8 @@ test("checkout quote returns a server-calculated delivery and total", async (t) 
   t.after(async () => {
     if (previousTestMode === undefined) delete process.env.PAYKEEPER_TEST_MODE;
     else process.env.PAYKEEPER_TEST_MODE = previousTestMode;
+    if (previousCitySecret === undefined) delete process.env.ORDER_ACCESS_SECRET;
+    else process.env.ORDER_ACCESS_SECRET = previousCitySecret;
     await new Promise((resolve) => server.close(resolve));
   });
 
@@ -80,6 +85,30 @@ test("checkout quote returns a server-calculated delivery and total", async (t) 
   assert.equal(result.totalPrice, 9242);
   assert.equal(result.paymentAmount, 1);
   assert.equal(result.paymentTestMode, true);
+
+  const city = issueCitySelection({ id: "test-city", name: "Москва", label: "г Москва", longitude: 37.6, latitude: 55.7 });
+  const postalBody = { ...body, cdekMode: undefined, cdekAddress: undefined,
+    deliveryMethod: "russian_post", postalPoint: "101000, Москва, отделение 1", deliveryCityToken: city.token };
+  const postalQuote = await fetch(url, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(postalBody),
+  });
+  const postalResult = await postalQuote.json();
+  assert.equal(postalQuote.status, 200);
+  assert.equal(postalResult.manual, false);
+  assert.equal(postalResult.merchandisePrice, 8500);
+  assert.equal(postalResult.totalPrice, 8500);
+  assert.equal(postalResult.deliveryPrice, null);
+  assert.equal(postalResult.deliveryPayLater, true);
+  assert.equal(postalResult.paymentAmount, 1);
+  for (const invalid of [
+    { deliveryCityToken: "forged-city" }, { postalPoint: "" },
+    { cdekMode: "office", cdekAddress: { code: "KRS1" } },
+  ]) {
+    const rejectedPostal = await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...postalBody, ...invalid }),
+    });
+    assert.equal(rejectedPostal.status, 400);
+  }
 
   const rejected = await fetch(url, {
     method: "POST",

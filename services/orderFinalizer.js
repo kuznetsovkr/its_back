@@ -81,7 +81,7 @@ const finalizePaidOrder = async ({
       !created || (!isManualFlow && order.paymentStatus === "paid" && order.status === "Оплачено");
 
     if (alreadyProcessed) {
-      if (order.paymentStatus === "paid") {
+      if (order.paymentStatus === "paid" && order.deliveryMode !== "russian_post") {
         await markPaidShipment(order.id, transaction);
       }
       return { ok: true, alreadyProcessed: true, order, inventory: null };
@@ -116,7 +116,7 @@ const finalizePaidOrder = async ({
     } else {
       order.status = "Оплачено";
       order.paidAt = order.paidAt || new Date();
-      await markPaidShipment(order.id, transaction);
+      if (order.deliveryMode !== "russian_post") await markPaidShipment(order.id, transaction);
     }
     if (hasNumericOverridePrice) order.totalPrice = overridePrice;
     if (overrides.deliveryAddress) order.deliveryAddress = overrides.deliveryAddress;
@@ -146,7 +146,7 @@ const finalizePaidOrder = async ({
       }
     }
 
-    if (autoCdekShipmentEnabled && result.order.paymentStatus === "paid") {
+    if (autoCdekShipmentEnabled && result.order.paymentStatus === "paid" && result.order.deliveryMode !== "russian_post") {
       try {
         result.shipment = await createCdekShipmentForOrder(parsedOrderId);
       } catch (error) {

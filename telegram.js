@@ -225,6 +225,7 @@ const buildOrderMessage = (order) => {
       : "",
     order.deliveryCity ? `🏙 ${order.deliveryCity}` : "",
     getDeliveryModeLabel(order.deliveryMode) ? `🚚 Способ получения: ${getDeliveryModeLabel(order.deliveryMode)}` : "",
+    order.deliveryMode === "russian_post" ? "📮 Доставка оплачивается отдельно после изготовления. Менеджер сообщает фактическую стоимость и отправляет чек." : "",
     `📍 ${order.deliveryAddress || "-"}`,
     order.deliveryComment ? `🚚 ${order.deliveryComment}` : "",
     `💰 ${priceLabel(order)}`,

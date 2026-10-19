@@ -88,12 +88,28 @@ beforeEach(() => {
     paykeeperPaymentId: null,
     paidAt: null,
     status: "Ожидание оплаты",
+    deliveryMode: "cdek_pvz",
   });
 });
 
 after(() => {
   if (previousAutoShipment === undefined) delete process.env.ENABLE_CDEK_AUTO_SHIPMENT;
   else process.env.ENABLE_CDEK_AUTO_SHIPMENT = previousAutoShipment;
+});
+
+test("a paid postal order never touches CDEK, even if automatic shipment creation is enabled", async () => {
+  process.env.ENABLE_CDEK_AUTO_SHIPMENT = "1";
+  order.deliveryMode = "russian_post";
+  const input = { orderId: order.id, provider: "paykeeper", eventId: "paid-postal", paymentConfirmed: true };
+  await finalizePaidOrder(input);
+  await finalizePaidOrder(input);
+  assert.equal(order.paymentStatus, "paid");
+  assert.equal(order.status, "Оплачено");
+  assert.equal(calls.telegram, 1);
+  assert.equal(calls.stockCommits, 1);
+  assert.deepEqual(calls.awaiting, []);
+  assert.deepEqual(calls.ready, []);
+  assert.deepEqual(calls.create, []);
 });
 
 test("paid order waits for fulfillment when automatic CDEK shipment is disabled", async () => {

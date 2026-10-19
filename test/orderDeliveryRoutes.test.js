@@ -82,7 +82,7 @@ const createBody = (overrides) => {
   return body;
 };
 
-for (const method of ["russian_post", "pickup"]) test(`${method} creates an unpaid saved request without a CDEK shipment or invoice`, async (t) => {
+for (const method of ["pickup"]) test(`${method} creates an unpaid saved request without a CDEK shipment or invoice`, async (t) => {
   const url = await openApp(t);
   const response = await fetch(url + "/orders/create", { method: "POST", body: createBody({ deliveryMethod: method }) });
   assert.equal(response.status, 200);
@@ -123,16 +123,49 @@ test("CDEK delivery still calculates the server total and prepares only its own 
   assert.equal(calls.orders[0].orderValues.deliveryAddress, "СДЭК, KRS1, Мира, 1, до ПВЗ");
 });
 
-test("unapproved delivery cannot apply a certificate or mix in stale CDEK data", async (t) => {
+test("pickup cannot apply a certificate and postal orders cannot mix in stale CDEK data", async (t) => {
   const url = await openApp(t);
   for (const overrides of [
-    { certificateCode: "ITS" + "A1".repeat(16) },
+    { deliveryMethod: "pickup", certificateCode: "ITS" + "A1".repeat(16) },
     { cdekMode: "office", cdekAddress: '{"code":"KRS1"}' },
   ]) {
     const response = await fetch(url + "/orders/create", { method: "POST", body: createBody(overrides) });
     assert.equal(response.status, 400);
   }
   assert.equal(calls.orders.length, 0);
+  assert.equal(calls.cdekQuotes.length, 0);
+});
+
+test("Russian Post charges only merchandise online and never creates a CDEK shipment", async (t) => {
+  const url = await openApp(t);
+  const response = await fetch(url + "/orders/create", { method: "POST", body: createBody({ deliveryMethod: "russian_post" }) });
+  assert.equal(response.status, 200);
+  const data = await response.json();
+  assert.equal(data.pricePending, false);
+  assert.equal(data.requiresBankPayment, true);
+  assert.equal(data.totalPrice, 8500);
+  assert.equal(data.deliveryPrice, null);
+  assert.equal(data.deliveryPayLater, true);
+  assert.equal(data.deliveryMode, "russian_post");
+  assert.equal(calls.orders[0].orderValues.deliveryAmountKopecks, 0);
+  assert.equal(calls.orders[0].orderValues.merchandiseAmountKopecks, 850000);
+  assert.equal(calls.orders[0].orderValues.paymentStatus, "pending");
+  assert.equal(calls.orders[0].orderValues.deliveryAddress, "Почта России, 660075, Красноярск, ул. Маерчака, 5");
+  assert.equal(calls.orders[0].shipmentValues, null);
+  assert.equal(calls.cdekQuotes.length, 0);
+  assert.equal(calls.invoices.length, 0);
+});
+
+test("an unpriced custom embroidery with Russian Post remains an unpaid request", async (t) => {
+  const url = await openApp(t);
+  const response = await fetch(url + "/orders/create", { method: "POST", body: createBody({ embroideryType: "custom",
+    customOption: JSON.stringify({ image: true, text: false }), deliveryMethod: "russian_post" }) });
+  assert.equal(response.status, 200);
+  const data = await response.json();
+  assert.equal(data.pricePending, true);
+  assert.equal(data.requiresBankPayment, false);
+  assert.equal(data.totalPrice, null);
+  assert.equal(calls.orders[0].shipmentValues, null);
   assert.equal(calls.cdekQuotes.length, 0);
 });
 

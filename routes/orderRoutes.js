@@ -125,23 +125,23 @@ router.post(
       petFaceCount,
       pricingConfig,
     });
-    // Non-CDEK tariffs/payment rules remain unapproved: preserve the existing request-only flow.
-    const isManualFlow = merchandiseQuote.manual || deliveryMethod !== "cdek";
+    const isManualFlow = merchandiseQuote.manual || !["cdek", "russian_post"].includes(deliveryMethod);
     if (certificateCode && isManualFlow) {
       throw new GiftCertificateError("Сертификат можно применить после расчёта стоимости. Для ручной заявки обратитесь к менеджеру", "certificate_manual_price_pending", 400);
     }
-    const cdekQuote = isManualFlow
+    const cdekQuote = isManualFlow || deliveryMethod !== "cdek"
       ? null
       : await calculateCdekDelivery({
           inventory: inv,
           cdekMode,
           cdekAddress,
         });
+    const onlineDeliveryPrice = cdekQuote?.deliveryPrice ?? 0;
     const totalPrice = isManualFlow
       ? null
-      : merchandiseQuote.merchandisePrice + cdekQuote.deliveryPrice;
+      : merchandiseQuote.merchandisePrice + onlineDeliveryPrice;
     const paymentSnapshot = isManualFlow ? {} : buildOrderPaymentSnapshot({
-      merchandisePrice: merchandiseQuote.merchandisePrice, deliveryPrice: cdekQuote.deliveryPrice,
+      merchandisePrice: merchandiseQuote.merchandisePrice, deliveryPrice: onlineDeliveryPrice,
     });
     const paymentAmount = isManualFlow ? null : paymentSnapshot.paymentAmount;
     const paymentTestMode = !isManualFlow && isPaykeeperTestMode();
@@ -201,7 +201,7 @@ router.post(
           expiresAt: stockReservation.expiresAt, transaction,
         });
         await createdOrder.update({
-          ...buildOrderPaymentSnapshot({ merchandisePrice: merchandiseQuote.merchandisePrice, deliveryPrice: cdekQuote.deliveryPrice,
+          ...buildOrderPaymentSnapshot({ merchandisePrice: merchandiseQuote.merchandisePrice, deliveryPrice: onlineDeliveryPrice,
             discountKopecks: certificateReservation.amountKopecks, testMode: paymentTestMode }),
           certificateId: certificateReservation.certificateId,
         }, { transaction });
@@ -270,6 +270,7 @@ router.post(
       pricePending: isManualFlow,
       merchandisePrice: merchandiseQuote.merchandisePrice,
       deliveryPrice: cdekQuote?.deliveryPrice ?? null,
+      deliveryPayLater: deliveryMethod === "russian_post",
       totalPrice,
       paymentAmount,
       paymentTestMode,
@@ -624,6 +625,7 @@ router.get('/:id', requireOrderAccess, orderReadRateLimit, async (req, res) => {
     items,
     hasBuyerEmail: Boolean(order.email),
     deliveryMode: order.deliveryMode || null,
+    deliveryPayLater: order.deliveryMode === "russian_post",
     paymentStatus: order.paymentStatus || null, // 'pending' | 'paid' | 'failed'
     requiresReview: order.paymentStatus === "review",
     paymentProvider: order.paymentProvider || null,
