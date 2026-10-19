@@ -131,3 +131,9 @@ test("alter migrations remain pending until their columns already exist", async 
   );
   assert.equal(adopted.state, "adopt");
 });
+
+test("data and money-type migrations are never adopted from column existence", async () => {
+  assert.deepEqual(await inspectMigrationBaseline({}, "shipping-money.js", {
+    baseline: { tableName: "orders", columns: ["totalPrice"], alwaysRun: true },
+  }, new Set(["orders"])), { state: "pending" });
+});

@@ -70,11 +70,11 @@ const claimShipment = async (orderId) =>
     });
     if (!order || order.paymentStatus !== "paid") return { skip: "not_paid", shipment };
 
-    const inventory = order.isCartOrder ? null : await Inventory.findByPk(order.inventoryId, {
+    const inventory = order.isCartOrder || shipment.packages?.length ? null : await Inventory.findByPk(order.inventoryId, {
       transaction,
       include: [{ association: "clothingType" }],
     });
-    if (!order.isCartOrder && !inventory) throw new Error("Inventory for CDEK shipment not found");
+    if (!order.isCartOrder && !shipment.packages?.length && !inventory) throw new Error("Inventory for CDEK shipment not found");
     if (order.isCartOrder && (!Array.isArray(shipment.packages) || !shipment.packages.length)) throw new Error("Cart shipment package snapshot not found");
 
     shipment.status = "processing";
@@ -92,7 +92,8 @@ const claimShipment = async (orderId) =>
   });
 
 const buildCdekOrderPayload = ({ order, inventory, shipment }) => {
-  const parcel = order.isCartOrder ? null : getGoodsPreset(inventory);
+  const hasSnapshot = Array.isArray(shipment.packages) && shipment.packages.length > 0;
+  const parcel = hasSnapshot || order.isCartOrder ? null : getGoodsPreset(inventory);
   return {
     type: 1,
     number: String(order.id),
@@ -103,7 +104,7 @@ const buildCdekOrderPayload = ({ order, inventory, shipment }) => {
       name: shipment.recipientName,
       phones: [{ number: shipment.recipientPhone }],
     },
-    packages: order.isCartOrder ? shipment.packages : [{
+    packages: hasSnapshot ? shipment.packages : [{
       ...parcel,
       number: `order-${order.id}-1`,
       items: [{

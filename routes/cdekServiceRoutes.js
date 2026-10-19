@@ -9,6 +9,7 @@ const {
   buildCdekOfficesParams,
 } = require("../lib/cdekRequestValidation");
 const { getCdekRequestContext } = require("../services/cdekClient");
+const { calculateCdekTariff, PricingError } = require("../services/orderPricing");
 
 const router = express.Router();
 const SERVICE_PATHS = ["/service.php", "/api/service.php"];
@@ -37,8 +38,8 @@ const relayHeaders = (upstreamHeaders, res) => {
 };
 
 const handleCdekError = (error, res) => {
-  if (error instanceof RequestValidationError) {
-    return res.status(400).json({
+  if (error instanceof RequestValidationError || error instanceof PricingError) {
+    return res.status(error.statusCode || 400).json({
       error: error.code,
       message: error.message,
       field: error.field || undefined,
@@ -69,8 +70,8 @@ router.get(
 
       const isPolygonRequest = action === "bycoordinate";
       const params = isPolygonRequest
-        ? buildCdekOfficesByCoordinateParams(req.query)
-        : buildCdekOfficesParams(req.query);
+        ? buildCdekOfficesByCoordinateParams(Object.fromEntries(Object.entries(req.query).filter(([key]) => key !== "shippingContext")))
+        : buildCdekOfficesParams(Object.fromEntries(Object.entries(req.query).filter(([key]) => key !== "shippingContext")));
       const { baseUrl, headers } = await getCdekRequestContext();
       const endpoint = isPolygonRequest ? "deliverypoints/byPolygons" : "deliverypoints";
       const response = await axios.get(`${baseUrl}/${endpoint}`, {
@@ -101,17 +102,15 @@ router.post(
         return res.status(400).json({ message: "Unknown action" });
       }
 
-      const { getShippingPackageProfiles } = require("../services/clothingTypes");
-      const packageProfiles = await getShippingPackageProfiles();
-      const payload = buildCdekCalculatePayload(req.body, packageProfiles);
-      const { baseUrl, headers } = await getCdekRequestContext();
-      const response = await axios.post(`${baseUrl}/calculator/tarifflist`, payload, {
-        headers: withWidgetClientHeaders(headers),
-        timeout: 15_000,
-      });
-
-      relayHeaders(response.headers, res);
-      return res.status(200).json(response.data);
+      if (req.query.shippingContext) {
+        const payload = buildCdekCalculatePayload(req.body, [], req.query.shippingContext);
+        const quote = await calculateCdekTariff({ packages: payload.packages, declaredValue: payload.declaredValue, toLocation: payload.to_location });
+        res.set("Cache-Control", "no-store");
+        return res.json({ tariff_codes: [{ ...quote.tariff, tariff_code: quote.tariffCode, tariff_name: "СДЭК — до ПВЗ",
+          delivery_mode: 4, delivery_sum: quote.deliveryPrice, total_sum: quote.deliveryPrice }] });
+      }
+      // Old cached clients must refresh, not show an uninsured/incorrect quote.
+      throw new RequestValidationError("Обновите страницу для расчёта доставки со страховкой", "shippingContext");
     } catch (error) {
       return handleCdekError(error, res);
     }

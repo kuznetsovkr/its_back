@@ -25,7 +25,7 @@ mockModule("../services/orderPricing", { ...pricing, resolveOffice: async (addre
   return { cityCode: 278, office: { code: "KRS1", location: { city: "Красноярск", address: "Мира, 1" } } };
 }, calculateCdekDelivery: async (input) => {
   calls.cdekQuotes.push(input);
-  return { deliveryPrice: 742, tariffCode: 136, office: { code: "KRS1", location: { city: "Красноярск", address: "Мира, 1" } } };
+  return { deliveryPrice: 742, tariffCode: 136, packages: [{ number: "1", length: 35, width: 35, height: 7, weight: 800 }], office: { code: "KRS1", location: { city: "Красноярск", address: "Мира, 1" } } };
 } });
 mockModule("../services/lowStockMonitor", { checkItemAndNotify: async () => {} });
 mockModule("../services/orderFinalizer", {});

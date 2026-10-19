@@ -133,6 +133,7 @@ router.post(
       ? null
       : await calculateCdekDelivery({
           inventory: inv,
+          merchandisePrice: merchandiseQuote.merchandisePrice,
           cdekMode,
           cdekAddress,
         });
@@ -192,6 +193,8 @@ router.post(
             recipientName: recipientFullName,
             recipientPhone,
             declaredValue: merchandiseQuote.merchandisePrice,
+            packages: cdekQuote.packages.map(parcel => ({ ...parcel, items: [{ name: inv.productType, ware_key: `INVENTORY-${inv.id}`,
+              cost: merchandiseQuote.merchandisePrice, payment: { value: 0 }, weight: parcel.weight, amount: 1 }] })),
           }
         : null,
       preparePayment: certificateCode ? async ({ order: createdOrder, reservation: stockReservation, transaction }) => {

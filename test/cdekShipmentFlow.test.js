@@ -45,6 +45,16 @@ test("CDEK retries use bounded exponential backoff", () => {
   assert.equal(getCdekRetryDelayMs(100), 6 * 60 * 60 * 1000);
 });
 
+test("single-item shipments retain frozen dimensions and full declared value despite catalog or certificate changes", () => {
+  const packages = [{ number: "order-77-1", length: 30, width: 25, height: 3, weight: 300,
+    items: [{ name: "Футболка", amount: 1, cost: 7000, weight: 300, payment: { value: 0 } }] }];
+  const payload = buildCdekOrderPayload({ order: { id: 77, productType: "Футболка", paymentAmount: 1, certificateDiscountKopecks: 700000 }, inventory: null,
+    shipment: { packages, tariffCode: 136, deliveryPoint: "MSK1", recipientName: "Получатель", recipientPhone: "+79991234567", declaredValue: 7000 } });
+  assert.deepEqual(payload.packages, packages);
+  assert.equal(payload.delivery_recipient_cost.value, 0);
+  assert.equal(payload.services, undefined, "IM insurance is derived automatically from item costs, not duplicated as an order service");
+});
+
 test("cart CDEK shipment uses immutable packages for every unit and the separate recipient's phone", () => {
   const packages = [1, 2, 3].map((index) => ({ number: `parcel-${index}`, weight: 800, width: 35, height: 35, length: 7,
     items: [{ name: "Худи", amount: 1, payment: { value: 0 }, cost: 9000, weight: 800 }] }));

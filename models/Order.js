@@ -45,7 +45,8 @@ const Order = sequelize.define("order", {
   paidAt: { type: DataTypes.DATE, allowNull: true },
 
   // Payment
-  totalPrice: { type: DataTypes.INTEGER, allowNull: true },
+  totalPrice: { type: DataTypes.DECIMAL(12, 2), allowNull: true,
+    get() { const value = this.getDataValue("totalPrice"); return value == null ? null : Number(value); } },
   paymentAmount: { type: DataTypes.DECIMAL(12, 2), allowNull: true },
   merchandiseAmountKopecks: { type: DataTypes.INTEGER, allowNull: true },
   deliveryAmountKopecks: { type: DataTypes.INTEGER, allowNull: true },

@@ -34,6 +34,18 @@ const {
 } = require("../services/pricingConfig");
 
 const router = express.Router();
+router.post("/shipping-context", requireTrustedOrigin, pricingQuoteRateLimit, async (req, res) => {
+  try {
+    if (!req.is("application/json")) return res.status(415).json({ message: "Content-Type должен быть application/json" });
+    const result = await require("../services/shippingQuoteContext").createShippingQuoteContext(req.body);
+    res.set("Cache-Control", "no-store");
+    return res.json(result);
+  } catch (error) {
+    if (error instanceof PricingError || error instanceof RequestValidationError) return res.status(error.statusCode).json({ message: error.message, code: error.code, field: error.field });
+    console.error("[shipping-context] Failed to prepare delivery calculation");
+    return res.status(503).json({ message: "Не удалось подготовить расчёт доставки. Откройте карту заново" });
+  }
+});
 const certificateQuoteLimit = createRateLimiter({ windowMs: 15 * 60_000, max: 30, keyPrefix: "certificate-quote", message: "Слишком много проверок сертификата. Попробуйте позже" });
 const SIZE_GUIDE_KEYS = new Set(["tshirt", "hoodie", "svitshot"]);
 
@@ -256,6 +268,7 @@ router.post("/checkout", requireTrustedOrigin, pricingQuoteRateLimit,
 
     const deliveryQuote = postal ? postalPaymentDelivery(postal) : await calculateCdekDelivery({
       inventory,
+      merchandisePrice: merchandiseQuote.merchandisePrice,
       cdekMode,
       cdekAddress,
     });
@@ -271,6 +284,7 @@ router.post("/checkout", requireTrustedOrigin, pricingQuoteRateLimit,
       manual: false,
       merchandisePrice: merchandiseQuote.merchandisePrice,
       deliveryPrice: postal ? null : deliveryQuote.deliveryPrice,
+      insurancePrice: postal ? null : deliveryQuote.insurancePrice,
       deliveryPayLater: Boolean(postal),
       totalPrice,
       ...publicOrderPayment({ ...snapshot, totalPrice }),

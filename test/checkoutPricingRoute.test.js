@@ -28,7 +28,10 @@ mockModule("../services/inventoryResolver", {
 });
 mockModule("../services/orderPricing", {
   ...actualPricing,
-  calculateCdekDelivery: async () => ({ deliveryPrice: 742 }),
+  calculateCdekDelivery: async ({ merchandisePrice }) => {
+    assert.equal(merchandisePrice > 0, true);
+    return { deliveryPrice: 477.75, insurancePrice: 78.75 };
+  },
 });
 mockModule("../services/pricingConfig", {
   getPricingConfig: async () => ({}),
@@ -81,8 +84,9 @@ test("checkout quote returns a server-calculated delivery and total", async (t) 
 
   assert.equal(response.status, 200);
   assert.equal(result.merchandisePrice, 8500);
-  assert.equal(result.deliveryPrice, 742);
-  assert.equal(result.totalPrice, 9242);
+  assert.equal(result.deliveryPrice, 477.75);
+  assert.equal(result.insurancePrice, 78.75);
+  assert.equal(result.totalPrice, 8977.75);
   assert.equal(result.paymentAmount, 1);
   assert.equal(result.paymentTestMode, true);
 

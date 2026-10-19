@@ -2,6 +2,7 @@ const axios = require("axios");
 const { MAX_PATRONUS_COUNT, MAX_PET_FACE_COUNT } = require("../lib/embroideryLimits");
 const { getCdekRequestContext } = require("./cdekClient");
 const { CAR_DESIGNS, getCarDesignPrices } = require("../lib/carDesigns");
+const { combineShippingPackages } = require("../lib/shippingPackages");
 
 const DEFAULT_CDEK_TARIFF_CODE = 136;
 const PRICE_FIELD_BY_EMBROIDERY = Object.freeze({
@@ -229,53 +230,45 @@ const resolveOffice = async (addressRaw) => {
   return { office, cityCode };
 };
 
-const calculateCdekDelivery = async ({ inventory, packages, cdekMode, cdekAddress }) => {
+const calculateCdekTariff = async ({ packages, declaredValue, toLocation, deliveryPoint }) => {
+  if (declaredValue !== null && (!Number.isSafeInteger(declaredValue) || declaredValue <= 0)) {
+    throw new PricingError("Для страховки нужна полная стоимость изделий", 422, "cdek_declared_value_required");
+  }
+  const { baseUrl, headers } = await getCdekRequestContext();
+  const tariffCode = getCdekTariffCode();
+  const payload = { type: 1, currency: 1, lang: "rus", tariff_code: tariffCode,
+    from_location: getCdekFromLocation(), to_location: toLocation, packages,
+    ...(deliveryPoint ? { delivery_point: deliveryPoint } : {}),
+    ...(declaredValue === null ? {} : { services: [{ code: "INSURANCE", parameter: String(declaredValue) }] }),
+  };
+  const { data: tariff } = await axios.post(`${baseUrl}/calculator/tariff`, payload, { headers, timeout: 15_000 });
+  const validMoney = value => typeof value === "number" && Number.isFinite(value) && value >= 0 && value < 10_000_000
+    && Math.abs(value * 100 - Math.round(value * 100)) < 0.000001;
+  const insurance = tariff?.services?.find(service => service.code === "INSURANCE");
+  if (tariff?.errors?.length || (tariff?.currency && tariff.currency !== "RUB") || !validMoney(tariff?.total_sum)
+    || (declaredValue !== null && (!validMoney(insurance?.total_sum) || tariff.total_sum < insurance.total_sum))) {
+    throw new PricingError("СДЭК не вернул полную стоимость доставки со страховкой. Попробуйте другой ПВЗ или повторите позже", 422, "cdek_tariff_unavailable");
+  }
+  // total_sum already includes VAT, discounts and services. Never add insurance twice.
+  return { deliveryPrice: Math.round(tariff.total_sum * 100) / 100,
+    insurancePrice: insurance ? Math.round(insurance.total_sum * 100) / 100 : null,
+    tariffCode, tariff, from: payload.from_location, packages };
+};
+
+const calculateCdekDelivery = async ({ inventory, packages, merchandisePrice, cdekMode, cdekAddress }) => {
   if (String(cdekMode || "").toLowerCase() !== "office") {
     throw new PricingError("Для онлайн-оплаты выберите пункт выдачи СДЭК", 400, "cdek_office_required");
   }
 
   const { office, cityCode } = await resolveOffice(cdekAddress);
-  const { baseUrl, headers } = await getCdekRequestContext();
-  const tariffCode = getCdekTariffCode();
-  const payload = {
-    type: 1,
-    currency: 1,
-    lang: "rus",
-    from_location: getCdekFromLocation(),
-    to_location: { code: cityCode },
-    packages: packages || [getGoodsPreset(inventory)],
-  };
-
-  const response = await axios.post(`${baseUrl}/calculator/tarifflist`, payload, {
-    headers,
-    timeout: 15_000,
-  });
-  const tariffs = Array.isArray(response.data?.tariff_codes) ? response.data.tariff_codes : [];
-  const tariff = tariffs.find((item) => Number(item?.tariff_code) === tariffCode);
-  const rawDeliveryPrice = tariff?.delivery_sum ?? tariff?.total_sum;
-  const deliveryPrice = Number(rawDeliveryPrice);
-
-  if (!tariff || !Number.isFinite(deliveryPrice) || deliveryPrice < 0) {
-    throw new PricingError(
-      "СДЭК не вернул стоимость доставки для выбранного пункта",
-      422,
-      "cdek_tariff_unavailable"
-    );
-  }
-
-  return {
-    deliveryPrice: Math.round(deliveryPrice),
-    tariffCode,
-    tariff,
-    office,
-    from: getCdekFromLocation(),
-    packages: payload.packages,
-  };
+  return { ...await calculateCdekTariff({ packages: combineShippingPackages(packages || [getGoodsPreset(inventory)]),
+    declaredValue: merchandisePrice, toLocation: { code: cityCode }, deliveryPoint: office.code }), office };
 };
 
 module.exports = {
   PricingError,
   calculateCdekDelivery,
+  calculateCdekTariff,
   calculateMerchandisePrice,
   getCdekFromLocation,
   getCdekTariffCode,

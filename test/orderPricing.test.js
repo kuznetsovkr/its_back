@@ -13,17 +13,17 @@ const profiles = {
   tshirt: {
     code: "tshirt", patronusLimit: 1,
     patronusPrice: 8500, carPrice: 6500, carSimplePrice: 5000, carMediumPrice: 7000, carComplexPrice: null, petFacePrice: 6000,
-    packageWidth: 30, packageHeight: 20, packageLength: 3, packageWeight: 300,
+    packageWidth: 25, packageHeight: 3, packageLength: 30, packageWeight: 300,
   },
   svitshot: {
     code: "svitshot", patronusLimit: 5,
     patronusPrice: 9500, carPrice: 8000, carSimplePrice: 6000, carMediumPrice: 8000, carComplexPrice: 11000, petFacePrice: 7000,
-    packageWidth: 35, packageHeight: 35, packageLength: 7, packageWeight: 800,
+    packageWidth: 35, packageHeight: 7, packageLength: 35, packageWeight: 800,
   },
   hoodie: {
     code: "hoodie", patronusLimit: 5,
     patronusPrice: 10000, carPrice: 8500, carSimplePrice: 6500, carMediumPrice: 8500, carComplexPrice: 11500, petFacePrice: 8000,
-    packageWidth: 35, packageHeight: 35, packageLength: 7, packageWeight: 800,
+    packageWidth: 35, packageHeight: 7, packageLength: 35, packageWeight: 800,
   },
 };
 const inventory = (key, overrides = {}) => ({
@@ -172,6 +172,7 @@ test("стоимость доставки пересчитывается по д
       data: [{ code: "KRS1", location: { city_code: 44, city: "Красноярск", address: "Настоящий адрес" } }],
     };
   };
+  let responseTariff = { delivery_sum: 580, total_sum: 687.75, services: [{ code: "INSURANCE", total_sum: 78.75 }] };
   axios.post = async (url, payload) => {
     if (url.endsWith("/oauth/token")) {
       return { data: { access_token: "test-token", expires_in: 3600 } };
@@ -180,27 +181,35 @@ test("стоимость доставки пересчитывается по д
     assert.equal(payload.from_location.code, 278);
     assert.equal(payload.to_location.code, 44);
     assert.equal(payload.packages[0].weight, 800);
-    return {
-      data: {
-        tariff_codes: [
-          { tariff_code: 999, delivery_sum: 1 },
-          { tariff_code: 136, delivery_sum: 742.4 },
-        ],
-      },
-    };
+    assert.ok(url.endsWith("/calculator/tariff"));
+    assert.equal(payload.tariff_code, 136);
+    assert.equal(payload.delivery_point, "KRS1");
+    assert.deepEqual(payload.services, [{ code: "INSURANCE", parameter: "10000" }]);
+    assert.deepEqual(payload.packages, [{ number: "1", length: 35, width: 35, height: 7, weight: 800 }]);
+    return { data: responseTariff };
   };
 
   try {
     const result = await calculateCdekDelivery({
       inventory: inventory("hoodie"),
+      merchandisePrice: 10000,
       cdekMode: "office",
       cdekAddress: { code: "KRS1", city_code: 1 },
     });
 
-    assert.equal(result.deliveryPrice, 742);
+    assert.equal(result.deliveryPrice, 687.75);
+    assert.equal(result.insurancePrice, 78.75);
     assert.equal(result.office.location.city_code, 44);
     assert.equal(result.office.location.city, "Красноярск");
     assert.equal(result.tariffCode, 136);
+    for (const invalid of [
+      { delivery_sum: 580 }, { total_sum: null, services: [{ code: "INSURANCE", total_sum: 78.75 }] },
+      { total_sum: 609, services: [] }, { total_sum: 687.75, services: [{ code: "INSURANCE", total_sum: "78.75" }] },
+      { ...responseTariff, errors: [{ code: "unavailable" }] },
+    ]) {
+      responseTariff = invalid;
+      await assert.rejects(calculateCdekDelivery({ inventory: inventory("hoodie"), merchandisePrice: 10000, cdekMode: "office", cdekAddress: { code: "KRS1" } }), { code: "cdek_tariff_unavailable" });
+    }
   } finally {
     axios.get = originalGet;
     axios.post = originalPost;

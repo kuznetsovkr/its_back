@@ -7,6 +7,7 @@ const { ORDER_UPLOAD_DIR, inspectStoredImage, isPathInside } = require("../lib/u
 const { calculateMerchandisePrice, calculateCdekDelivery, getGoodsPreset } = require("./orderPricing");
 const { getOrderDelivery } = require("../lib/orderDelivery");
 const { postalPaymentDelivery, cartPostalIdentity } = require("../lib/postalDelivery");
+const { combineShippingPackages } = require("../lib/shippingPackages");
 const { buildOrderPaymentSnapshot, publicOrderPayment, rublesToKopecks } = require("./orderCertificatePricing");
 const { quoteCertificateForOrder, reserveCertificateForOrder, releaseCertificateForOrder } = require("./giftCertificates");
 const { getReservationTtlMs, releaseReservationForOrder } = require("./inventoryReservations");
@@ -68,7 +69,7 @@ const createCartCheckoutService = (overrides = {}) => {
     const packages = priced.lines.flatMap((line) => Array.from({ length: line.quantity }, () => ({ ...line.parcel })));
     packages.forEach((parcel, index) => { parcel.number = String(index + 1); });
     const delivery = input.deliveryMethod === "russian_post" ? postalPaymentDelivery({ postalPoint: input.postalPoint, selectedCity: input.selectedCity })
-      : await deps.calculateDelivery({ packages, cdekMode: "office", cdekAddress: { code: input.officeCode } });
+      : await deps.calculateDelivery({ packages: combineShippingPackages(packages), merchandisePrice: priced.merchandisePrice, cdekMode: "office", cdekAddress: { code: input.officeCode } });
     const certificate = input.certificateCode ? await quoteCertificateForOrder({ code: input.certificateCode,
       productKopecks: rublesToKopecks(priced.merchandisePrice), deliveryKopecks: rublesToKopecks(delivery.deliveryPrice, true) }) : null;
     const payment = buildOrderPaymentSnapshot({ merchandisePrice: priced.merchandisePrice, deliveryPrice: delivery.deliveryPrice, discountKopecks: certificate?.discountKopecks || 0 });
@@ -79,6 +80,7 @@ const createCartCheckoutService = (overrides = {}) => {
   const publicQuote = (prepared, input) => ({ currency: "RUB", manual: false, isCartOrder: true, revision: input.revision,
     merchandisePrice: prepared.priced.merchandisePrice, deliveryPrice: prepared.delivery.deliveryPayLater ? null : prepared.delivery.deliveryPrice,
     deliveryPayLater: Boolean(prepared.delivery.deliveryPayLater),
+    insurancePrice: prepared.delivery.insurancePrice ?? null,
     totalPrice: prepared.priced.merchandisePrice + prepared.delivery.deliveryPrice,
     ...publicOrderPayment(prepared.payment), quoteHash: prepared.quoteHash, packages: prepared.delivery.packages,
     certificate: prepared.certificate ? { discount: prepared.certificate.discountKopecks / 100, remaining: prepared.certificate.remainingKopecks / 100, expiresAt: prepared.certificate.expiresAt } : null,
@@ -133,15 +135,15 @@ const createCartCheckoutService = (overrides = {}) => {
             if (reserved.amountKopecks !== prepared.payment.certificateDiscountKopecks) throw new CartError("Доступный баланс сертификата изменился. Пересчитайте заказ", "cart_quote_changed");
             await order.update({ ...prepared.payment, certificateId: reserved.certificateId }, { transaction });
           }
-          const shipmentPackages = [];
+          const shipmentItems = [];
           for (const [position, line] of priced.lines.entries()) {
             const item = await deps.OrderItem.create({ orderId: order.id, sourceCartItemId: line.id, position,
               inventoryId: line.inventoryId, productType: line.productType, color: line.color, size: line.size, imageUrl: line.imageUrl,
               embroideryType: line.embroideryType, embroideryTypeRu: line.embroideryTypeRu, patronusCount: line.patronusCount,
               carDesign: line.carDesign,
               petFaceCount: line.petFaceCount, comment: line.comment, quantity: line.quantity, unitPrice: line.unitPrice, linePrice: line.linePrice, parcel: line.parcel }, { transaction });
-            for (let unit = 0; unit < line.quantity; unit += 1) shipmentPackages.push({ ...line.parcel, number: `order-${order.id}-${position + 1}-${unit + 1}`,
-              items: [{ name: line.productType, ware_key: `ORDER-${order.id}-ITEM-${item.id}`, cost: line.unitPrice, payment: { value: 0 }, weight: line.parcel.weight, amount: 1 }] });
+            shipmentItems.push({ name: line.productType, ware_key: `ORDER-${order.id}-ITEM-${item.id}`, cost: line.unitPrice,
+              payment: { value: 0 }, weight: line.parcel.weight, amount: line.quantity });
             const attachments = await deps.CartAttachment.findAll({ where: { cartItemId: line.id }, order: [["position", "ASC"]], transaction });
             if (!attachments.length) throw new CartError("Для одного из изделий не сохранились фотографии. Добавьте изделие заново", "cart_photo_missing");
             const directory = path.join(ORDER_UPLOAD_DIR, String(order.id));
@@ -160,7 +162,8 @@ const createCartCheckoutService = (overrides = {}) => {
           }
           if (input.deliveryMethod !== "russian_post") await deps.Shipment.create({ orderId: order.id, provider: "cdek", status: "pending_payment", tariffCode: prepared.delivery.tariffCode,
             deliveryPoint: prepared.delivery.office.code, recipientName: input.buyer.recipientFullName, recipientPhone: input.buyer.recipientPhone,
-            declaredValue: priced.merchandisePrice, packages: shipmentPackages }, { transaction });
+            declaredValue: priced.merchandisePrice,
+            packages: prepared.delivery.packages.map(parcel => ({ ...parcel, number: `order-${order.id}-1`, items: shipmentItems })) }, { transaction });
           await Checkout.create({ id: key, cartId: cart.id, orderId: order.id, requestHash }, { transaction });
           await cart.update({ checkoutOrderId: order.id }, { transaction });
           return orderData(order.id, transaction);

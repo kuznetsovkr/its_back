@@ -46,9 +46,13 @@ let now = new Date();
 const verifyTurnstile = async ({ token }) => { if (token !== "fixture") throw Object.assign(new Error("Не пройдена проверка"), { statusCode: 403 }); };
 mock("../services/turnstileVerification", { verifyTurnstileToken: verifyTurnstile, TurnstileVerificationError: class extends Error {} });
 const carts = createCartService({ now: () => now, verifyTurnstile });
-let deliveryPrice = 450;
-const calculateDelivery = async ({ packages, cdekAddress }) => ({ deliveryPrice, tariffCode: 136, packages,
-  office: { code: cdekAddress.code, location: { city: "Красноярск", address: "Мира, 1", city_code: 278 } } });
+let deliveryPrice = 477.75;
+const deliveryCalls = [];
+const calculateDelivery = async ({ packages, merchandisePrice, cdekAddress }) => {
+  deliveryCalls.push({ packages, merchandisePrice });
+  return { deliveryPrice, insurancePrice: 78.75, tariffCode: 136, packages,
+    office: { code: cdekAddress.code, location: { city: "Красноярск", address: "Мира, 1", city_code: 278 } } };
+};
 const checkout = createCartCheckoutService({ carts, verifyTurnstile, calculateDelivery });
 const ids = [];
 const inventories = [];
@@ -83,7 +87,7 @@ const paid = (orderId, suffix = "paid") => finalizePaidOrder({ orderId, provider
 const issue = async (denomination = 20000) => {
   const certificate = await createCertificatePurchase({ denomination, fullName: "Покупатель Тестовый", phone: "+79991234567", email: "cart@example.com", privacyConsent: true });
   await certificate.update({ paykeeperInvoiceId: `cart-fixture-invoice-${certificate.id}` });
-  await activateCertificate({ certificateId: certificate.id, paymentId: `cart-fixture-cert-${++certificateIndex}`, amountKopecks: 100, paymentConfirmed: true });
+  await activateCertificate({ certificateId: certificate.id, paymentId: `cart-fixture-cert-${++certificateIndex}`, amountKopecks: certificate.paymentAmountKopecks, paymentConfirmed: true });
   await certificate.reload();
   return { certificate, code: getCertificateCodeForDelivery(certificate) };
 };
@@ -98,7 +102,7 @@ const run = async () => {
   const access = await newCart();
   await add(access, hoodie, { quantity: 2 }); await add(access, hoodie, { embroideryType: "petFace", comment: "Другое фото" }); await add(access, shirt);
   const quoted = await quote(access);
-  assert.equal(quoted.packages.length, 4, "one package for each unit, not just each embroidery configuration");
+  assert.deepEqual(quoted.packages, [{ number: "1", length: 35, width: 35, height: 24, weight: 2700 }], "all garments share one bag; quantities affect height and grams");
   const input = payload(quoted);
   const key = crypto.randomUUID();
   const [first, repeated] = await Promise.all([checkout.create(access, input, key), checkout.create(access, input, key)]);
@@ -110,11 +114,16 @@ const run = async () => {
   assert.equal(first.buyer.recipientPhone, "+79998887766");
   assert.equal(first.paymentAmount, 1);
   assert.equal(first.totalPrice, quoted.totalPrice);
+  assert.equal((await Order.findByPk(first.orderId)).totalPrice, quoted.totalPrice, "fractional delivery remains exact after PostgreSQL round-trip");
   assert.equal((await hoodie.reload()).quantity, 97);
   assert.equal((await shirt.reload()).quantity, 99);
   const reserves = await Reservation.findAll({ where: { orderId: first.orderId }, order: [["inventoryId", "ASC"]] });
   assert.deepEqual(reserves.map((row) => row.quantity).sort(), [1, 3]);
-  assert.equal((await Shipment.findOne({ where: { orderId: first.orderId } })).packages.length, 4);
+  const frozenShipment = await Shipment.findOne({ where: { orderId: first.orderId } });
+  assert.equal(frozenShipment.packages.length, 1);
+  assert.equal(frozenShipment.packages[0].items.length, 3);
+  assert.equal(frozenShipment.packages[0].items.reduce((sum, item) => sum + item.amount, 0), 4);
+  assert.equal(frozenShipment.packages[0].items.reduce((sum, item) => sum + item.cost * item.amount, 0), quoted.merchandisePrice);
   await assert.rejects(carts.setQuantity(access, first.items[0].sourceCartItemId, 1), { code: "cart_checkout_locked" });
   const frozen = await carts.getCart(access);
   assert.equal(frozen.checkout.orderId, first.orderId);
@@ -153,7 +162,7 @@ const run = async () => {
   assert.equal(free.amountDue, 0); assert.equal(free.requiresBankPayment, false);
   await finalizePaidOrder({ orderId: free.orderId, provider: "certificate", paymentConfirmed: true, eventId: `cart-free-${free.orderId}` });
   assert.equal((await Order.findByPk(free.orderId)).paymentStatus, "paid");
-  deliveryPrice = 450;
+  deliveryPrice = 477.75;
 
   const cancelledCart = await newCart(); await add(cancelledCart, hoodie, { quantity: 2 }); await add(cancelledCart, shirt);
   const beforeCancel = [(await hoodie.reload()).quantity, (await shirt.reload()).quantity];
@@ -267,6 +276,21 @@ const run = async () => {
   assert.deepEqual(Buffer.from(await (await fetch(photoUrl, { headers: orderHeaders })).arrayBuffer()), imageBytes);
   assert.equal((await carts.getCart(httpCart)).items.length, 0);
   assert.equal((await bankCallback(cancelOrder.orderId, "1.00", "late")).status, 200);
+  const liveCart = await newCart(); await add(liveCart, hoodie); await add(liveCart, shirt);
+  process.env.PAYKEEPER_TEST_MODE = "0";
+  const liveCertificate = await issue(20000);
+  const insuredQuote = await quote(liveCart, liveCertificate.code);
+  assert.equal(insuredQuote.amountDue, 477.75, "even full merchandise coverage leaves delivery and insurance payable");
+  assert.equal(deliveryCalls.at(-1).merchandisePrice, insuredQuote.merchandisePrice, "insurance basis is not reduced by certificate or bank test mode");
+  assert.deepEqual(deliveryCalls.at(-1).packages, [{ number: "1", length: 35, width: 35, height: 10, weight: 1100 }]);
+  const insuredOrder = await checkout.create(liveCart, payload(insuredQuote, liveCertificate.code), crypto.randomUUID());
+  const insuredHeaders = { ...headers, "X-Order-Access-Token": insuredOrder.orderToken };
+  assert.equal((await fetch(`${base}/payments/paykeeper/link`, { method: "POST", headers: insuredHeaders, body: JSON.stringify({ orderId: insuredOrder.orderId }) })).status, 200);
+  assert.equal(invoices.at(-1).pay_amount, "477.75");
+  assert.equal((await bankCallback(insuredOrder.orderId, "477.75")).status, 200);
+  assert.equal((await bankCallback(insuredOrder.orderId, "477.75")).status, 200);
+  assert.equal((await Order.findByPk(insuredOrder.orderId)).paymentStatus, "paid");
+  process.env.PAYKEEPER_TEST_MODE = "1";
   assert.equal((await Order.findByPk(cancelOrder.orderId)).paymentStatus, "review");
   assert.equal((await bankCallback(cancelOrder.orderId, "1.00", "late")).status, 200);
   // Postal checkout: both cart and standalone order pay for merchandise only.
