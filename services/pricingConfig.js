@@ -72,6 +72,11 @@ const updatePricingConfig = async (config) => {
 
     await record.update(toPersistenceFields(config), { transaction });
     for (const type of config.types) {
+      if (currentTypes.find((item) => Number(item.id) === type.id)?.code === "tshirt" && type.carDesignPrices.complex != null) {
+        const error = new Error("Сложный дизайн автомобиля не предлагается для футболки");
+        error.statusCode = 400;
+        throw error;
+      }
       await ClothingType.update({
         displayOrder: type.displayOrder,
         sizeGuideKey: type.sizeGuideKey,
@@ -82,6 +87,9 @@ const updatePricingConfig = async (config) => {
         packageWeight: type.package.weight,
         patronusPrice: type.prices.Patronus,
         carPrice: type.prices.Car,
+        carSimplePrice: type.carDesignPrices.simple,
+        carMediumPrice: type.carDesignPrices.medium,
+        carComplexPrice: type.carDesignPrices.complex,
         petFacePrice: type.prices.petFace,
       }, { where: { id: type.id }, transaction });
     }

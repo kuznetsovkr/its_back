@@ -1,4 +1,5 @@
 const express = require("express");
+const { CAR_DESIGNS, getCarDesignPrices } = require("../lib/carDesigns");
 const { MAX_PATRONUS_COUNT, MAX_PET_FACE_COUNT } = require("../lib/embroideryLimits");
 const requireTrustedOrigin = require("../middleware/trustedOrigin");
 const requireAdmin = require("../middleware/requireAdmin");
@@ -23,6 +24,7 @@ const {
   readPatronusCount,
   readPetFaceCount,
   readString,
+  readCarDesign,
 } = require("../lib/requestValidation");
 const {
   getPricingConfig,
@@ -46,11 +48,16 @@ const readPricingConfig = (body) => {
     const type = ensurePlainObject(rawType, field);
     assertAllowedKeys(
       type,
-      new Set(["id", "displayOrder", "sizeGuideKey", "patronusLimit", "prices", "package"]),
+      new Set(["id", "displayOrder", "sizeGuideKey", "patronusLimit", "prices", "carDesignPrices", "package"]),
       field
     );
     const prices = ensurePlainObject(type.prices, `${field}.prices`);
     assertAllowedKeys(prices, new Set(["Patronus", "Car", "petFace"]), `${field}.prices`);
+    const carPrices = ensurePlainObject(type.carDesignPrices, `${field}.carDesignPrices`);
+    assertAllowedKeys(carPrices, new Set(Object.keys(CAR_DESIGNS)), `${field}.carDesignPrices`);
+    const carDesignPrices = Object.fromEntries(Object.keys(CAR_DESIGNS).map((key) => [key,
+      key !== "simple" && carPrices[key] == null ? null
+        : readPositiveInteger(carPrices[key], `${field}.carDesignPrices.${key}`, { max: 1_000_000 })]));
     const packageProfile = ensurePlainObject(type.package, `${field}.package`);
     assertAllowedKeys(
       packageProfile,
@@ -66,9 +73,10 @@ const readPricingConfig = (body) => {
       displayOrder: readPositiveInteger(type.displayOrder, `${field}.displayOrder`, { max: 10_000 }),
       sizeGuideKey,
       patronusLimit: readPositiveInteger(type.patronusLimit, `${field}.patronusLimit`, { max: MAX_PATRONUS_COUNT }),
+      carDesignPrices,
       prices: {
         Patronus: readPositiveInteger(prices.Patronus, `${field}.prices.Patronus`, { max: 1_000_000 }),
-        Car: readPositiveInteger(prices.Car, `${field}.prices.Car`, { max: 1_000_000 }),
+        Car: carDesignPrices.simple,
         petFace: readPositiveInteger(prices.petFace, `${field}.prices.petFace`, { max: 1_000_000 }),
       },
       package: {
@@ -156,6 +164,8 @@ router.post("/quote", requireTrustedOrigin, pricingQuoteRateLimit, async (req, r
     return res.json({
       currency: "RUB",
       prices: getPriceCatalog({ inventory, patronusCount, petFaceCount, pricingConfig }),
+      carDesignPrices: getCarDesignPrices(inventory.clothingType),
+      clothingTypeCode: inventory.clothingType.code,
     });
   } catch (error) {
     if (error instanceof PricingError || error instanceof RequestValidationError) {
@@ -184,6 +194,7 @@ router.post("/checkout", requireTrustedOrigin, pricingQuoteRateLimit,
         "color",
         "size",
         "embroideryType",
+        "carDesign",
         "patronusCount",
         "petFaceCount",
         "cdekMode",
@@ -204,6 +215,7 @@ router.post("/checkout", requireTrustedOrigin, pricingQuoteRateLimit,
       ? readPatronusCount(body.patronusCount)
       : readPositiveInteger(body.patronusCount, "patronusCount", { max: MAX_PET_FACE_COUNT });
     const petFaceCount = readPetFaceCount(body.petFaceCount);
+    const carDesign = readCarDesign(body.carDesign, embroideryType.toLowerCase() === "car" ? "Car" : embroideryType);
     const cdekMode = readString(body.cdekMode, "cdekMode", { max: 16 }).toLowerCase();
     const certificateCode = readString(body.certificateCode, "certificateCode", { max: 80 });
     const cdekAddress = body.cdekAddress
@@ -222,6 +234,7 @@ router.post("/checkout", requireTrustedOrigin, pricingQuoteRateLimit,
       embroideryType,
       patronusCount,
       petFaceCount,
+      carDesign,
       pricingConfig,
     });
     if (merchandiseQuote.manual || !cdekMode) {

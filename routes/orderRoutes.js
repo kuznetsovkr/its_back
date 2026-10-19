@@ -88,6 +88,7 @@ router.post(
       size,
       embroideryType,
       embroideryTypeRu,
+      carDesign,
       patronusCount,
       petFaceCount,
       customText,
@@ -119,6 +120,7 @@ router.post(
     const merchandiseQuote = calculateMerchandisePrice({
       inventory: inv,
       embroideryType,
+      carDesign,
       patronusCount,
       petFaceCount,
       pricingConfig,
@@ -159,6 +161,7 @@ router.post(
         size: inv.size,
         embroideryType,
         embroideryTypeRu,
+        carDesign,
         patronusCount,
         petFaceCount,
         customText,

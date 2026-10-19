@@ -1,6 +1,7 @@
 const crypto = require("node:crypto");
 const { MAX_PATRONUS_COUNT } = require("../lib/embroideryLimits");
 const ClothingType = require("../models/ClothingType");
+const { getCarDesignPrices } = require("../lib/carDesigns");
 
 const CLOTHING_TYPE_ATTRIBUTES = Object.freeze([
   "id",
@@ -15,6 +16,7 @@ const CLOTHING_TYPE_ATTRIBUTES = Object.freeze([
   "packageWeight",
   "patronusPrice",
   "carPrice",
+  "carSimplePrice", "carMediumPrice", "carComplexPrice",
   "petFacePrice",
 ]);
 
@@ -25,7 +27,7 @@ const getTypePrices = (record) => {
   const value = asPlain(record) || {};
   return {
     Patronus: value.patronusPrice ?? null,
-    Car: value.carPrice ?? null,
+    Car: getCarDesignPrices(value).simple ?? value.carPrice ?? null,
     petFace: value.petFacePrice ?? null,
   };
 };
@@ -48,6 +50,7 @@ const serializeClothingType = (record) => {
       ? Math.min(value.patronusLimit, MAX_PATRONUS_COUNT)
       : value.patronusLimit,
     prices: getTypePrices(value),
+    carDesignPrices: getCarDesignPrices(value),
     package: {
       width: value.packageWidth,
       height: value.packageHeight,

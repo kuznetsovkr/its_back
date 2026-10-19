@@ -12,17 +12,17 @@ const {
 const profiles = {
   tshirt: {
     code: "tshirt", patronusLimit: 1,
-    patronusPrice: 8500, carPrice: 6500, petFacePrice: 6000,
+    patronusPrice: 8500, carPrice: 6500, carSimplePrice: 5000, carMediumPrice: 7000, carComplexPrice: null, petFacePrice: 6000,
     packageWidth: 30, packageHeight: 20, packageLength: 3, packageWeight: 300,
   },
   svitshot: {
     code: "svitshot", patronusLimit: 5,
-    patronusPrice: 9500, carPrice: 8000, petFacePrice: 7000,
+    patronusPrice: 9500, carPrice: 8000, carSimplePrice: 6000, carMediumPrice: 8000, carComplexPrice: 11000, petFacePrice: 7000,
     packageWidth: 35, packageHeight: 35, packageLength: 7, packageWeight: 800,
   },
   hoodie: {
     code: "hoodie", patronusLimit: 5,
-    patronusPrice: 10000, carPrice: 8500, petFacePrice: 8000,
+    patronusPrice: 10000, carPrice: 8500, carSimplePrice: 6500, carMediumPrice: 8500, carComplexPrice: 11500, petFacePrice: 8000,
     packageWidth: 35, packageHeight: 35, packageLength: 7, packageWeight: 800,
   },
 };
@@ -44,7 +44,7 @@ test("сервер рассчитывает каталог цен для выб�
     }),
     {
       Patronus: 15000,
-      Car: 8500,
+      Car: 6500,
       petFace: 12000,
     }
   );
@@ -56,8 +56,9 @@ test("расчёт использует профиль изделия и сер�
   };
 
   assert.equal(calculateMerchandisePrice({
-    inventory: inventory("hoodie", { carPrice: 12345 }),
+    inventory: inventory("hoodie", { carSimplePrice: 12345 }),
     embroideryType: "Car",
+    carDesign: "simple",
     pricingConfig: changedConfig,
   }).merchandisePrice, 12345);
   assert.equal(calculateMerchandisePrice({
@@ -74,12 +75,13 @@ test("расчёт не определяет профиль изделия по 
     clothingType: {
       ...profiles.hoodie,
       code: "custom-garment",
-      carPrice: 4321,
+      carSimplePrice: 4321,
     },
   };
   assert.equal(calculateMerchandisePrice({
     inventory: arbitraryInventory,
     embroideryType: "Car",
+    carDesign: "simple",
     pricingConfig,
   }).merchandisePrice, 4321);
 });
@@ -128,6 +130,7 @@ test("сервер отклоняет недопустимое количест�
     inventory: inventory("hoodie"),
     embroideryType: "Car",
     patronusCount: 5,
+    carDesign: "medium",
     pricingConfig,
   }).merchandisePrice, 8500);
 });

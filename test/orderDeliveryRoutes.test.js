@@ -11,6 +11,7 @@ const mockModule = (request, exports) => {
 };
 const inventory = { id: 12, productType: "Худи", color: "Чёрный", size: "M", clothingType: {
   code: "hoodie", patronusLimit: 4, patronusPrice: 10000, carPrice: 8500, petFacePrice: 8000,
+  carSimplePrice: 6500, carMediumPrice: 8500, carComplexPrice: 11500,
 } };
 const pricing = require("../services/orderPricing");
 mockModule("../db", { transaction: async (callback) => callback({ LOCK: { UPDATE: "UPDATE" } }) });
@@ -74,7 +75,7 @@ const openApp = async (t) => {
 const createBody = (overrides) => {
   const body = new FormData();
   for (const [name, value] of Object.entries({ firstName: "Иван", lastName: "Иванов", phone: "+79991234567", privacyConsent: "true",
-    productType: "Худи", color: "Чёрный", size: "M", embroideryType: "Car", patronusCount: "1", petFaceCount: "1",
+    productType: "Худи", color: "Чёрный", size: "M", embroideryType: "Car", carDesign: "medium", patronusCount: "1", petFaceCount: "1",
     deliveryCityToken: issueCitySelection({ id: "cdek:278", name: "Красноярск", label: "г Красноярск", longitude: 92.868, latitude: 56.0106, pickup: true }).token,
     deliveryMethod: "russian_post", deliveryAddress: "660075, Красноярск, ул. Маерчака, 5", ...overrides })) body.append(name, value);
   body.append("images", new Blob(["fixture bytes; decoding is tested separately"], { type: "image/png" }), "photo.png");

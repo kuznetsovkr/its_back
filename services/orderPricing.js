@@ -1,6 +1,7 @@
 const axios = require("axios");
 const { MAX_PATRONUS_COUNT, MAX_PET_FACE_COUNT } = require("../lib/embroideryLimits");
 const { getCdekRequestContext } = require("./cdekClient");
+const { CAR_DESIGNS, getCarDesignPrices } = require("../lib/carDesigns");
 
 const DEFAULT_CDEK_TARIFF_CODE = 136;
 const PRICE_FIELD_BY_EMBROIDERY = Object.freeze({
@@ -51,6 +52,7 @@ const parseCount = (value, fieldName) => {
 const calculateMerchandisePrice = ({
   inventory,
   embroideryType,
+  carDesign,
   patronusCount = 1,
   petFaceCount = 1,
   pricingConfig,
@@ -66,7 +68,14 @@ const calculateMerchandisePrice = ({
   }
 
   const clothingProfile = getClothingProfile(inventory);
-  const basePrice = clothingProfile[PRICE_FIELD_BY_EMBROIDERY[normalizedType]];
+  if (normalizedType === "Car" && !Object.hasOwn(CAR_DESIGNS, carDesign || "")) {
+    throw new PricingError("Выберите сложность дизайна автомобиля", 400, "car_design_required");
+  }
+  const basePrice = normalizedType === "Car" ? getCarDesignPrices(clothingProfile)[carDesign]
+    : clothingProfile[PRICE_FIELD_BY_EMBROIDERY[normalizedType]];
+  if (normalizedType === "Car" && basePrice == null) {
+    throw new PricingError("Этот дизайн автомобиля недоступен для выбранного изделия", 422, "car_design_unavailable");
+  }
   if (!Number.isInteger(basePrice) || basePrice <= 0) {
     throw new PricingError("Для выбранной комбинации цена не настроена", 422, "price_not_configured");
   }
@@ -117,13 +126,7 @@ const getPriceCatalog = ({ inventory, patronusCount = 1, petFaceCount = 1, prici
     petFaceCount,
     pricingConfig,
   }).merchandisePrice,
-  Car: calculateMerchandisePrice({
-    inventory,
-    embroideryType: "Car",
-    patronusCount,
-    petFaceCount,
-    pricingConfig,
-  }).merchandisePrice,
+  Car: getCarDesignPrices(getClothingProfile(inventory)).simple ?? null,
   petFace: calculateMerchandisePrice({
     inventory,
     embroideryType: "petFace",

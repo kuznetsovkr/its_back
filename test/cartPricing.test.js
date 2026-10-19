@@ -3,14 +3,14 @@ const assert = require("node:assert/strict");
 const { quoteCartItems } = require("../services/cartPricing");
 const { calculateMerchandisePrice } = require("../services/orderPricing");
 
-const inventory = { id: 10, quantity: 6, clothingType: { code: "hoodie", patronusLimit: 4, patronusPrice: 6000, carPrice: 7000, petFacePrice: 6000 } };
+const inventory = { id: 10, quantity: 6, clothingType: { code: "hoodie", patronusLimit: 4, patronusPrice: 6000, carPrice: 7000, carSimplePrice: 7000, petFacePrice: 6000 } };
 const item = (changes = {}) => ({ inventoryId: 10, productType: "Худи", color: "Чёрный", size: "M",
   quantity: 1, embroideryType: "Patronus", patronusCount: 1, petFaceCount: 1, ...changes });
 const deps = (changes = {}) => ({ findInventory: async () => inventory, calculatePrice: calculateMerchandisePrice,
   getPricingExtras: async () => ({ Patronus: 1000, petFace: 500 }), ...changes });
 
 test("cart estimate uses server prices and sums independent configurations and quantities", async () => {
-  const result = await quoteCartItems([item({ patronusCount: 4, quantity: 2 }), item({ embroideryType: "petFace", petFaceCount: 5 }), item({ embroideryType: "Car" })], deps());
+  const result = await quoteCartItems([item({ patronusCount: 4, quantity: 2 }), item({ embroideryType: "petFace", petFaceCount: 5 }), item({ embroideryType: "Car", carDesign: "simple" })], deps());
   assert.deepEqual(result.items.map((entry) => entry.unitPrice), [9000, 8000, 7000]);
   assert.equal(result.merchandisePrice, 33000);
   assert.equal(inventory.quantity, 6);

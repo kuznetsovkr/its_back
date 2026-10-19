@@ -12,6 +12,7 @@ module.exports = sequelize.define("order_item", {
   imageUrl: { type: DataTypes.TEXT, allowNull: true },
   embroideryType: { type: DataTypes.STRING(32), allowNull: false },
   embroideryTypeRu: { type: DataTypes.STRING(120), allowNull: false },
+  carDesign: { type: DataTypes.STRING(16), allowNull: true },
   patronusCount: { type: DataTypes.INTEGER, allowNull: false },
   petFaceCount: { type: DataTypes.INTEGER, allowNull: false },
   comment: { type: DataTypes.TEXT, allowNull: false, defaultValue: "" },

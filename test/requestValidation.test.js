@@ -29,6 +29,7 @@ const validOrder = () => ({
   color: "Чёрный",
   size: "M",
   embroideryType: "Car",
+  carDesign: "simple",
   embroideryTypeRu: "данные клиента не должны определять подпись",
   patronusCount: "1",
   petFaceCount: "1",
@@ -49,7 +50,7 @@ test("order validation normalizes trusted values and rejects client price fields
   assert.equal(validated.recipientPhone, "+79991234567");
   assert.equal(validated.recipientFullName, "Иванов Иван");
   assert.equal(validated.embroideryType, "Car");
-  assert.equal(validated.embroideryTypeRu, "Автомобиль");
+  assert.equal(validated.embroideryTypeRu, "Автомобиль — простой дизайн (около 15 см)");
   assert.equal(validated.turnstileToken, "turnstile-response-token");
   assert.equal(validateOrderCreateInput({ ...validOrder(), certificateCode: "ITS" + "A1".repeat(16) }, [{}]).certificateCode, "ITS" + "A1".repeat(16));
   for (const field of ["certificateDiscountKopecks", "amountDueKopecks", "certificateId", "paymentTestMode"]) {

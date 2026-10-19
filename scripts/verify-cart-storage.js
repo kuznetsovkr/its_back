@@ -74,11 +74,12 @@ const run = async () => {
   assert.equal(usedTokens.size, 1, "one initial CAPTCHA covers session creation and its first upload, not duplicates");
   await assert.rejects(add(session, key, { comment: "Другая вышивка" }), { code: "cart_request_conflict" });
   await assert.rejects(add(session, crypto.randomUUID(), { turnstileToken: "invalid" }), { statusCode: 403 });
-  const second = await add(session, crypto.randomUUID(), { embroideryType: "Car", comment: "Другое изделие" });
+  const second = await add(session, crypto.randomUUID(), { embroideryType: "Car", carDesign: "medium", comment: "Другое изделие" });
   assert.equal(second.items.length, 2);
   assert.equal(usedTokens.size, 2);
   const restored = await createCartService({ now: () => now, verifyTurnstile }).getCart(access);
   assert.equal(restored.items.length, 2);
+  assert.equal(restored.items.find((item) => item.embroideryType === "Car").carDesign, "medium");
   assert.deepEqual(restored.items.map((item) => item.comment), ["Сохранённая вышивка", "Другое изделие"]);
   assert.equal(JSON.stringify(restored).includes("accessTokenHash"), false);
   assert.equal(JSON.stringify(restored).includes("requestHash"), false);

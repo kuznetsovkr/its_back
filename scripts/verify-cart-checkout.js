@@ -65,7 +65,7 @@ const add = async (access, inventory, { embroideryType = "Car", comment = "Фо�
   const file = { path: filePath, originalname: "pet.png", mimetype: "image/png", size: imageBytes.length };
   file.validatedImage = await validateImageFile(file);
   const raw = { productType: inventory.productType, color: inventory.color, size: inventory.size,
-    embroideryType, patronusCount: "1", petFaceCount: "1", comment, privacyConsent: "true", turnstileToken: "fixture" };
+    embroideryType, carDesign: embroideryType === "Car" ? "simple" : "", patronusCount: "1", petFaceCount: "1", comment, privacyConsent: "true", turnstileToken: "fixture" };
   const saved = await carts.addItem({ access, input: validateCartItem(raw, [file]), files: [file], requestKey: crypto.randomUUID() });
   if (quantity > 1) await carts.setQuantity(access, saved.addedItemId, quantity);
   return saved.addedItemId;
@@ -103,6 +103,7 @@ const run = async () => {
   assert.equal(first.orderId, repeated.orderId);
   assert.equal(await CartCheckout.count({ where: { cartId: access.cartId } }), 1);
   assert.equal(first.items.length, 3);
+  assert.ok(first.items.filter((item) => item.embroideryType === "Car").every((item) => item.carDesign === "simple"));
   assert.equal(await OrderItem.count({ where: { orderId: first.orderId } }), 3);
   assert.equal(first.buyer.recipientPhone, "+79998887766");
   assert.equal(first.paymentAmount, 1);
@@ -174,10 +175,10 @@ const run = async () => {
   await carts.setQuantity(staleCart, staleItem, 2);
   await assert.rejects(checkout.create(staleCart, payload(staleQuote), crypto.randomUUID()), { code: "cart_changed" });
   const priceQuote = await quote(staleCart);
-  const type = await ClothingType.findByPk(hoodie.clothingTypeId); const originalPrice = type.carPrice;
-  await type.update({ carPrice: originalPrice + 100 });
+  const type = await ClothingType.findByPk(hoodie.clothingTypeId); const originalPrice = type.carSimplePrice;
+  await type.update({ carSimplePrice: originalPrice + 100 });
   await assert.rejects(checkout.create(staleCart, payload(priceQuote), crypto.randomUUID()), { code: "cart_quote_changed" });
-  await type.update({ carPrice: originalPrice });
+  await type.update({ carSimplePrice: originalPrice });
 
   const failCart = await newCart(); await add(failCart, hoodie); await add(failCart, shirt);
   const failQuote = await quote(failCart); const quantityBeforeFailure = (await hoodie.reload()).quantity;

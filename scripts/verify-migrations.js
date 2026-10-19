@@ -143,6 +143,11 @@ const assertCatalogProfilesMigrated = async () => {
     assert.equal(byCode.get("tshirt").patronusLimit, 1);
     assert.equal(byCode.get("svitshot").carPrice, 5555);
     assert.equal(byCode.get("hoodie").petFacePrice, 9999);
+    assert.equal(byCode.get("tshirt").carSimplePrice, 5000);
+    assert.equal(byCode.get("tshirt").carMediumPrice, 7000);
+    assert.equal(byCode.get("tshirt").carComplexPrice, null);
+    assert.equal(byCode.get("hoodie").carComplexPrice, 11500);
+    assert.equal(byCode.get("svitshot").carComplexPrice, 11000);
 
     const unknownType = types.find((type) => type.name === "Куртка");
     assert.match(unknownType.code, /^type-\d+$/);

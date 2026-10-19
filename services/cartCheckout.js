@@ -44,6 +44,7 @@ const createCartCheckoutService = (overrides = {}) => {
       }
       if (!["Patronus", "Car", "petFace"].includes(item.embroideryType)) throw new CartError("Индивидуальную вышивку нужно оформить отдельной заявкой", "cart_manual_item", 400);
       const quoted = calculateMerchandisePrice({ inventory, embroideryType: item.embroideryType,
+        carDesign: item.carDesign,
         patronusCount: item.patronusCount, petFaceCount: item.petFaceCount, pricingConfig });
       return { ...item, unitPrice: quoted.merchandisePrice, linePrice: quoted.merchandisePrice * item.quantity, parcel: getGoodsPreset(inventory) };
     });
@@ -132,6 +133,7 @@ const createCartCheckoutService = (overrides = {}) => {
             const item = await deps.OrderItem.create({ orderId: order.id, sourceCartItemId: line.id, position,
               inventoryId: line.inventoryId, productType: line.productType, color: line.color, size: line.size, imageUrl: line.imageUrl,
               embroideryType: line.embroideryType, embroideryTypeRu: line.embroideryTypeRu, patronusCount: line.patronusCount,
+              carDesign: line.carDesign,
               petFaceCount: line.petFaceCount, comment: line.comment, quantity: line.quantity, unitPrice: line.unitPrice, linePrice: line.linePrice, parcel: line.parcel }, { transaction });
             for (let unit = 0; unit < line.quantity; unit += 1) shipmentPackages.push({ ...line.parcel, number: `order-${order.id}-${position + 1}-${unit + 1}`,
               items: [{ name: line.productType, ware_key: `ORDER-${order.id}-ITEM-${item.id}`, cost: line.unitPrice, payment: { value: 0 }, weight: line.parcel.weight, amount: 1 }] });

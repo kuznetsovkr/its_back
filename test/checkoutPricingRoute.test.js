@@ -17,6 +17,7 @@ mockModule("../services/inventoryResolver", {
       patronusLimit: 5,
       patronusPrice: 10000,
       carPrice: 8500,
+      carSimplePrice: 6500, carMediumPrice: 8500, carComplexPrice: 11500,
       petFacePrice: 8000,
       packageWidth: 35,
       packageHeight: 35,
@@ -60,6 +61,7 @@ test("checkout quote returns a server-calculated delivery and total", async (t) 
     color: "Чёрный",
     size: "M",
     embroideryType: "Car",
+    carDesign: "medium",
     patronusCount: 1,
     petFaceCount: 1,
     cdekMode: "office",
@@ -101,7 +103,7 @@ test("checkout quote returns a server-calculated delivery and total", async (t) 
   const fourPatronuses = await quote(4, 5);
   assert.equal(fourPatronuses.status, 200);
   assert.deepEqual((await fourPatronuses.json()).prices, {
-    Patronus: 25000, Car: 8500, petFace: 16000,
+    Patronus: 25000, Car: 6500, petFace: 16000,
   });
   const fivePatronuses = await quote(5, 5);
   assert.equal(fivePatronuses.status, 400);

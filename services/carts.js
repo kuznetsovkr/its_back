@@ -74,6 +74,7 @@ const createCartService = (overrides = {}) => {
       unitPrice: item.unitPrice, linePrice: item.linePrice, pricingError: item.pricingError, stockWarning: item.stockWarning || "",
       parcel: item.parcel || null,
       imageUrl: item.imageUrl, embroideryType: item.embroideryType, embroideryTypeRu: item.embroideryTypeRu,
+      carDesign: item.carDesign,
       patronusCount: item.patronusCount, petFaceCount: item.petFaceCount, comment: item.comment, quantity: item.quantity,
       attachments: attachments.filter((file) => file.cartItemId === item.id).map((file) => ({
         id: file.id, originalName: file.originalName, mime: file.mime, size: file.size,
@@ -192,6 +193,7 @@ const createCartService = (overrides = {}) => {
           const item = await CartItem.create({ id: crypto.randomUUID(), cartId: cart.id, requestKey: key, requestHash,
             inventoryId: inventory.id, productType: inventory.productType, color: inventory.color, size: inventory.size,
             imageUrl: inventory.imageUrl || null, embroideryType: input.embroideryType, embroideryTypeRu: input.embroideryTypeRu,
+            carDesign: input.carDesign,
             patronusCount: input.patronusCount, petFaceCount: input.petFaceCount, comment: input.comment, privacyConsentAt: deps.now(), quantity: 1 }, { transaction });
           for (const [position, file] of files.entries()) {
             const stored = await deps.persistImage(file, itemDirectory(cart.id, item.id));

@@ -70,6 +70,9 @@ const ClothingType = sequelize.define("clothingType", {
         allowNull: true,
         validate: { min: 1 },
     },
+    carSimplePrice: { type: DataTypes.INTEGER, allowNull: true, validate: { min: 1 } },
+    carMediumPrice: { type: DataTypes.INTEGER, allowNull: true, validate: { min: 1 } },
+    carComplexPrice: { type: DataTypes.INTEGER, allowNull: true, validate: { min: 1 } },
     petFacePrice: {
         type: DataTypes.INTEGER,
         allowNull: true,

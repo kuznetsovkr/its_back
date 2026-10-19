@@ -11,6 +11,7 @@ const quoteCartItems = async (items, { findInventory, calculatePrice, getPricing
     }
     try {
       const price = calculatePrice({ inventory, embroideryType: item.embroideryType,
+        carDesign: item.carDesign,
         patronusCount: item.patronusCount, petFaceCount: item.petFaceCount, pricingConfig });
       if (price.manual || !Number.isSafeInteger(price.merchandisePrice) || price.merchandisePrice <= 0) {
         throw new PricingError("Для изделия требуется расчёт менеджера");
@@ -23,7 +24,8 @@ const quoteCartItems = async (items, { findInventory, calculatePrice, getPricing
         pricingError: "", stockWarning: required > inventory.quantity ? "Выбранного количества сейчас нет на складе" : "" };
     } catch (error) {
       if (!(error instanceof PricingError)) throw error;
-      return { ...item, unitPrice: null, linePrice: null, pricingError: error.message };
+      return { ...item, unitPrice: null, linePrice: null, pricingError: error.code === "car_design_required"
+        ? "Правила вышивки автомобилей изменились. Удалите это изделие и создайте заново, выбрав сложность дизайна." : error.message };
     }
   }));
   return { items: quoted, merchandisePrice: quoted.some((item) => item.linePrice == null)

@@ -22,6 +22,7 @@ const Order = sequelize.define("order", {
   // Embroidery
   embroideryType: { type: DataTypes.STRING, allowNull: false },
   embroideryTypeRu: { type: DataTypes.STRING, allowNull: true },
+  carDesign: { type: DataTypes.STRING(16), allowNull: true },
   patronusCount: { type: DataTypes.INTEGER, allowNull: true },
   petFaceCount: { type: DataTypes.INTEGER, allowNull: true },
   customText: { type: DataTypes.STRING, allowNull: true },
